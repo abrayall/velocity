@@ -20,6 +20,7 @@ import (
 var (
 	endpoint  string
 	apiKey    string
+	tenant    string
 	outputFmt string
 	dataFlag  string
 )
@@ -97,6 +98,7 @@ func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.PersistentFlags().StringVar(&endpoint, "endpoint", getEnv("VELOCITY_ENDPOINT", "http://localhost:8080"), "API endpoint URL")
 	rootCmd.PersistentFlags().StringVar(&apiKey, "api-key", getEnv("VELOCITY_API_KEY", ""), "API key for authentication")
+	rootCmd.PersistentFlags().StringVar(&tenant, "tenant", getEnv("VELOCITY_TENANT", "demo"), "Tenant identifier")
 	rootCmd.PersistentFlags().StringVarP(&outputFmt, "output", "o", "table", "Output format (table, json)")
 
 	// Version command
@@ -363,6 +365,7 @@ func getField(item map[string]interface{}, keys ...string) string {
 type client struct {
 	baseURL    string
 	apiKey     string
+	tenant     string
 	httpClient *http.Client
 }
 
@@ -370,6 +373,7 @@ func newClient() *client {
 	return &client{
 		baseURL: endpoint,
 		apiKey:  apiKey,
+		tenant:  tenant,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -394,6 +398,9 @@ func (c *client) request(method, path string, body interface{}) ([]byte, error) 
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
 		req.Header.Set("X-API-Key", c.apiKey)
+	}
+	if c.tenant != "" {
+		req.Header.Set("X-Tenant", c.tenant)
 	}
 
 	resp, err := c.httpClient.Do(req)

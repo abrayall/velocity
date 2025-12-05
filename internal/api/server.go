@@ -141,7 +141,7 @@ func (s *Server) Handler() http.Handler {
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Authorization", "Content-Type"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Tenant"},
 		AllowCredentials: true,
 		MaxAge:           86400,
 	})
@@ -173,11 +173,12 @@ func (s *Server) loggingHandler(next http.Handler) http.Handler {
 	})
 }
 
-// getTenant extracts tenant from token or returns default
-// TODO: Implement actual token parsing when auth is added
+// getTenant extracts tenant from X-Tenant header or returns default
 func (s *Server) getTenant(r *http.Request) string {
-	// For now, return hardcoded tenant until auth is implemented
-	return "velocity"
+	if tenant := r.Header.Get("X-Tenant"); tenant != "" {
+		return tenant
+	}
+	return "demo"
 }
 
 // infoHandler returns API info
