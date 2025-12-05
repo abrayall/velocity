@@ -205,7 +205,7 @@ func (s *Server) createContentHandler(w http.ResponseWriter, r *http.Request) {
 		if mimeType == "" {
 			mimeType = "application/json"
 		}
-		ext = s.getExtensionFromSchema(r.Context(), contentType)
+		ext = getExtensionFromMime(mimeType)
 		body = r.Body
 		defer r.Body.Close()
 	}

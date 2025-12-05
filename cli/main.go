@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -23,6 +25,7 @@ var (
 	tenant    string
 	outputFmt string
 	dataFlag  string
+	fileFlag  string
 )
 
 var rootCmd = &cobra.Command{
@@ -138,12 +141,13 @@ func init() {
 	}
 
 	createCmd := &cobra.Command{
-		Use:   "create <type>",
+		Use:   "create <type> <id>",
 		Short: "Create a content item",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.ExactArgs(2),
 		Run:   runCreate,
 	}
 	createCmd.Flags().StringVarP(&dataFlag, "data", "d", "", "JSON data for the content item")
+	createCmd.Flags().StringVarP(&fileFlag, "file", "f", "", "File to upload")
 
 	updateCmd := &cobra.Command{
 		Use:   "update <type> <id>",
@@ -152,6 +156,7 @@ func init() {
 		Run:   runUpdate,
 	}
 	updateCmd.Flags().StringVarP(&dataFlag, "data", "d", "", "JSON data for the content item")
+	updateCmd.Flags().StringVarP(&fileFlag, "file", "f", "", "File to upload")
 
 	deleteCmd := &cobra.Command{
 		Use:   "delete <type> <id>",
@@ -249,15 +254,24 @@ func runGet(cmd *cobra.Command, args []string) {
 
 func runCreate(cmd *cobra.Command, args []string) {
 	contentType := args[0]
+	id := args[1]
 	client := newClient()
 
-	data, err := parseData()
-	if err != nil {
-		ui.PrintError("Failed to parse data: %v", err)
-		os.Exit(1)
+	var result map[string]interface{}
+	var err error
+
+	if fileFlag != "" {
+		result, err = client.uploadFile(contentType, id, fileFlag)
+	} else {
+		var data map[string]interface{}
+		data, err = parseData()
+		if err != nil {
+			ui.PrintError("Failed to parse data: %v", err)
+			os.Exit(1)
+		}
+		result, err = client.createContent(contentType, id, data)
 	}
 
-	result, err := client.createContent(contentType, data)
 	if err != nil {
 		ui.PrintError("Failed to create content: %v", err)
 		os.Exit(1)
@@ -268,7 +282,7 @@ func runCreate(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	ui.PrintSuccess("Created %s: %s", contentType, getField(result, "id"))
+	ui.PrintSuccess("Created %s: %s", contentType, id)
 }
 
 func runUpdate(cmd *cobra.Command, args []string) {
@@ -276,13 +290,20 @@ func runUpdate(cmd *cobra.Command, args []string) {
 	id := args[1]
 	client := newClient()
 
-	data, err := parseData()
-	if err != nil {
-		ui.PrintError("Failed to parse data: %v", err)
-		os.Exit(1)
+	var err error
+
+	if fileFlag != "" {
+		_, err = client.uploadFile(contentType, id, fileFlag)
+	} else {
+		var data map[string]interface{}
+		data, err = parseData()
+		if err != nil {
+			ui.PrintError("Failed to parse data: %v", err)
+			os.Exit(1)
+		}
+		_, err = client.updateContent(contentType, id, data)
 	}
 
-	_, err = client.updateContent(contentType, id, data)
 	if err != nil {
 		ui.PrintError("Failed to update content: %v", err)
 		os.Exit(1)
@@ -467,10 +488,60 @@ func (c *client) getContent(contentType, id string) (map[string]interface{}, err
 	return result, nil
 }
 
-func (c *client) createContent(contentType string, body map[string]interface{}) (map[string]interface{}, error) {
-	data, err := c.request("POST", "/api/content/"+contentType, body)
+func (c *client) createContent(contentType, id string, body map[string]interface{}) (map[string]interface{}, error) {
+	data, err := c.request("POST", "/api/content/"+contentType+"/"+id, body)
 	if err != nil {
 		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (c *client) uploadFile(contentType, id, filePath string) (map[string]interface{}, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// Detect content type from file extension
+	ext := filepath.Ext(filePath)
+	mimeType := mime.TypeByExtension(ext)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	req, err := http.NewRequest("POST", c.baseURL+"/api/content/"+contentType+"/"+id, file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", mimeType)
+	if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
+	if c.tenant != "" {
+		req.Header.Set("X-Tenant", c.tenant)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(data))
 	}
 
 	var result map[string]interface{}
