@@ -322,6 +322,70 @@ func (c *Client) GetStream(ctx context.Context, tenant string, contentType strin
 	return c.getStreamByKey(ctx, key, "")
 }
 
+// FindContentStream finds and retrieves content with flexible extension resolution.
+// Resolution order:
+// 1. If id has extension (e.g., "bio.html"), use it directly
+// 2. If extHint provided, try that extension
+// 3. Try common extensions: .html, .json, then no extension
+// 4. Fall back to first matching file with any extension
+func (c *Client) FindContentStream(ctx context.Context, tenant string, contentType string, id string, extHint string, state State) (*ContentStream, error) {
+	if state == "" {
+		state = StateLive
+	}
+
+	// Check if id already has an extension
+	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
+		ext := id[idx+1:]
+		baseID := id[:idx]
+		key := c.contentKey(tenant, contentType, baseID, ext, state)
+		return c.getStreamByKey(ctx, key, "")
+	}
+
+	// Build list of extensions to try
+	var extsToTry []string
+
+	// Add hint first if provided
+	if extHint != "" {
+		extsToTry = append(extsToTry, extHint)
+	}
+
+	// Add common extensions (skip if already in hint)
+	for _, ext := range []string{"html", "json"} {
+		if ext != extHint {
+			extsToTry = append(extsToTry, ext)
+		}
+	}
+
+	// Try each extension
+	for _, ext := range extsToTry {
+		key := c.contentKey(tenant, contentType, id, ext, state)
+		stream, err := c.getStreamByKey(ctx, key, "")
+		if err == nil {
+			return stream, nil
+		}
+	}
+
+	// Fall back: list prefix and find first match
+	prefix := c.contentPrefix(tenant, contentType, state) + id + "."
+	input := &s3.ListObjectsV2Input{
+		Bucket:  aws.String(c.bucket),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(1),
+	}
+
+	result, err := c.s3Client.ListObjectsV2(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list objects: %w", err)
+	}
+
+	if len(result.Contents) > 0 {
+		key := aws.ToString(result.Contents[0].Key)
+		return c.getStreamByKey(ctx, key, "")
+	}
+
+	return nil, fmt.Errorf("content '%s' not found", id)
+}
+
 // GetVersionStream retrieves a specific version as a stream (caller must close Body)
 func (c *Client) GetVersionStream(ctx context.Context, tenant string, contentType string, id string, ext string, versionID string) (*ContentStream, error) {
 	key := c.contentKey(tenant, contentType, id, ext, StateLive)

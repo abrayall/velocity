@@ -57,6 +57,10 @@ func (s *Server) getExtensionFromSchema(ctx interface{}, contentType string) str
 
 // getExtensionFromMime returns the file extension from MIME type
 func getExtensionFromMime(mimeType string) string {
+	// Strip charset and other parameters (e.g., "text/html; charset=utf-8" -> "text/html")
+	if idx := strings.Index(mimeType, ";"); idx != -1 {
+		mimeType = strings.TrimSpace(mimeType[:idx])
+	}
 	if ext, ok := mimeToExt[mimeType]; ok {
 		return ext
 	}
@@ -251,9 +255,16 @@ func (s *Server) getContentHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 	state := getState(r)
 
-	ext := s.getExtensionFromSchema(r.Context(), contentType)
+	// Get extension hint from Accept header
+	extHint := ""
+	if accept := r.Header.Get("Accept"); accept != "" {
+		extHint = getExtensionFromMime(accept)
+		if extHint == "bin" {
+			extHint = "" // Don't use "bin" as a hint
+		}
+	}
 
-	stream, err := s.storage.GetStream(r.Context(), tenant, contentType, id, ext, state)
+	stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, state)
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") || strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Content '%s' not found", id))
