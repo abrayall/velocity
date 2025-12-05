@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+*.exe
+velocity-server
+velocity-cli
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Test
+coverage.out
