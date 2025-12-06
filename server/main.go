@@ -76,7 +76,7 @@ func main() {
 	fmt.Println()
 
 	// Create S3/Wasabi storage client
-	storageClient, err := storage.NewClient(storage.Config{
+	storageClient, err := storage.NewS3Storage(storage.S3Config{
 		Endpoint:        config.S3Endpoint,
 		Region:          config.S3Region,
 		Bucket:          config.S3Bucket,

@@ -19,35 +19,9 @@ import (
 	"velocity/internal/log"
 )
 
-// Environment represents the deployment environment
-type Environment string
-
-const (
-	Production  Environment = "production"
-	Development Environment = "development"
-)
-
-// State represents the content workflow state
-type State string
-
-const (
-	StateDraft   State = "draft"
-	StatePending State = "pending"
-	StateLive    State = "live"
-)
-
-// ValidState checks if a state string is valid
-func ValidState(s string) bool {
-	switch State(s) {
-	case StateDraft, StatePending, StateLive:
-		return true
-	}
-	return false
-}
-
-// Config holds the S3/Wasabi configuration
-type Config struct {
-	Endpoint        string // Wasabi endpoint (e.g., s3.wasabisys.com)
+// S3Config holds the S3/Wasabi configuration
+type S3Config struct {
+	Endpoint        string // S3 endpoint (e.g., s3.wasabisys.com)
 	Region          string // Region (e.g., us-east-1)
 	Bucket          string // Bucket name
 	AccessKeyID     string
@@ -55,92 +29,19 @@ type Config struct {
 	Root            string // Root path prefix (e.g., "development" or "production")
 }
 
-// Client provides S3/Wasabi storage operations
-type Client struct {
+// S3Storage provides S3-compatible storage operations.
+// Implements the Storage interface.
+type S3Storage struct {
 	s3Client *s3.Client
 	bucket   string
 	root     string // Root path prefix
 }
 
-// ContentItem represents a stored content item
-type ContentItem struct {
-	Key          string
-	Content      []byte // Only populated for non-streaming reads
-	ContentType  string
-	VersionID    string
-	LastModified time.Time
-	Size         int64
-	ETag         string
-	Metadata     map[string]string
-}
+// Ensure S3Storage implements Storage interface
+var _ Storage = (*S3Storage)(nil)
 
-// ContentStream represents a streamable content item
-type ContentStream struct {
-	Key          string
-	Body         io.ReadCloser
-	ContentType  string
-	VersionID    string
-	LastModified time.Time
-	Size         int64
-	ETag         string
-	Metadata     map[string]string
-}
-
-// ContentVersion represents a specific version of content
-type ContentVersion struct {
-	VersionID    string
-	LastModified time.Time
-	Size         int64
-	IsLatest     bool
-}
-
-// Schema represents a content type schema
-type Schema struct {
-	Name     string
-	Content  []byte
-	IsGlobal bool // true if global, false if tenant-specific
-}
-
-// HistoryRecord represents metadata about a version
-type HistoryRecord struct {
-	Version   string    `json:"version"`
-	Parent    string    `json:"parent,omitempty"`
-	Author    string    `json:"author,omitempty"`
-	Message   string    `json:"message,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-	Size      int64     `json:"size,omitempty"`
-}
-
-// Comment represents a review comment on content in draft/pending state
-type Comment struct {
-	ID         string    `json:"id"`
-	Author     string    `json:"author"`
-	Message    string    `json:"message"`
-	CreatedAt  time.Time `json:"created_at"`
-	Resolved   bool      `json:"resolved"`
-	ResolvedBy string    `json:"resolved_by,omitempty"`
-	ResolvedAt time.Time `json:"resolved_at,omitempty"`
-}
-
-// Webhook represents a webhook configuration for a tenant
-type Webhook struct {
-	ID     string   `json:"id"`
-	URL    string   `json:"url"`
-	Events []string `json:"events"` // create, update, delete, publish
-}
-
-// WebhookEvent represents an event payload sent to webhooks
-type WebhookEvent struct {
-	Event       string `json:"event"`
-	Tenant      string `json:"tenant"`
-	Type        string `json:"type"`
-	ID          string `json:"id"`
-	ContentType string `json:"content-type,omitempty"`
-	Timestamp   string `json:"timestamp"`
-}
-
-// NewClient creates a new S3/Wasabi storage client
-func NewClient(cfg Config) (*Client, error) {
+// NewS3Storage creates a new S3-compatible storage client
+func NewS3Storage(cfg S3Config) (*S3Storage, error) {
 	// Custom endpoint resolver for Wasabi
 	customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
 		if cfg.Endpoint != "" {
@@ -167,13 +68,13 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 
 	s3Client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.UsePathStyle = true // Required for Wasabi
+		o.UsePathStyle = true // Required for Wasabi and many S3-compatible stores
 	})
 
 	// Clean up root path (remove leading/trailing slashes)
 	root := strings.Trim(cfg.Root, "/")
 
-	return &Client{
+	return &S3Storage{
 		s3Client: s3Client,
 		bucket:   cfg.Bucket,
 		root:     root,
@@ -181,12 +82,12 @@ func NewClient(cfg Config) (*Client, error) {
 }
 
 // CheckConnection verifies connectivity to S3/Wasabi by checking if the bucket exists
-func (c *Client) CheckConnection(ctx context.Context) error {
-	_, err := c.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
-		Bucket: aws.String(c.bucket),
+func (s *S3Storage) CheckConnection(ctx context.Context) error {
+	_, err := s.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(s.bucket),
 	})
 	if err != nil {
-		return fmt.Errorf("cannot connect to bucket '%s': %w", c.bucket, err)
+		return fmt.Errorf("cannot connect to bucket '%s': %w", s.bucket, err)
 	}
 	return nil
 }
@@ -199,59 +100,59 @@ func (c *Client) CheckConnection(ctx context.Context) error {
 // /{root}/tenants/{tenant}/content/{type}/_pending/{id}.{ext} - Pending content
 
 // contentKey constructs the S3 key for a content item with state
-func (c *Client) contentKey(tenant string, contentType string, id string, ext string, state State) string {
+func (s *S3Storage) contentKey(tenant string, contentType string, id string, ext string, state State) string {
 	if state == StateLive || state == "" {
-		return path.Join(c.root, "tenants", tenant, "content", contentType, fmt.Sprintf("%s.%s", id, ext))
+		return path.Join(s.root, "tenants", tenant, "content", contentType, fmt.Sprintf("%s.%s", id, ext))
 	}
-	return path.Join(c.root, "tenants", tenant, "content", contentType, fmt.Sprintf("_%s", state), fmt.Sprintf("%s.%s", id, ext))
+	return path.Join(s.root, "tenants", tenant, "content", contentType, fmt.Sprintf("_%s", state), fmt.Sprintf("%s.%s", id, ext))
 }
 
 // contentPrefix returns the prefix for listing content of a type with state
-func (c *Client) contentPrefix(tenant string, contentType string, state State) string {
+func (s *S3Storage) contentPrefix(tenant string, contentType string, state State) string {
 	if state == StateLive || state == "" {
-		return path.Join(c.root, "tenants", tenant, "content", contentType) + "/"
+		return path.Join(s.root, "tenants", tenant, "content", contentType) + "/"
 	}
-	return path.Join(c.root, "tenants", tenant, "content", contentType, fmt.Sprintf("_%s", state)) + "/"
+	return path.Join(s.root, "tenants", tenant, "content", contentType, fmt.Sprintf("_%s", state)) + "/"
 }
 
 // historyKey constructs the S3 key for a history record
-func (c *Client) historyKey(tenant string, contentType string, id string, version string) string {
-	return path.Join(c.root, "tenants", tenant, "content", contentType, "_history", id, fmt.Sprintf("%s.json", version))
+func (s *S3Storage) historyKey(tenant string, contentType string, id string, version string) string {
+	return path.Join(s.root, "tenants", tenant, "content", contentType, "_history", id, fmt.Sprintf("%s.json", version))
 }
 
 // historyPrefix returns the prefix for listing history of an item
-func (c *Client) historyPrefix(tenant string, contentType string, id string) string {
-	return path.Join(c.root, "tenants", tenant, "content", contentType, "_history", id) + "/"
+func (s *S3Storage) historyPrefix(tenant string, contentType string, id string) string {
+	return path.Join(s.root, "tenants", tenant, "content", contentType, "_history", id) + "/"
 }
 
 // commentKey constructs the S3 key for a comment (within a state directory)
-func (c *Client) commentKey(tenant string, contentType string, contentID string, state State, id string) string {
-	return path.Join(c.root, "tenants", tenant, "content", contentType, fmt.Sprintf("_%s", state), "_comments", contentID, fmt.Sprintf("%s.json", id))
+func (s *S3Storage) commentKey(tenant string, contentType string, contentID string, state State, id string) string {
+	return path.Join(s.root, "tenants", tenant, "content", contentType, fmt.Sprintf("_%s", state), "_comments", contentID, fmt.Sprintf("%s.json", id))
 }
 
 // commentPrefix returns the prefix for listing comments on an item in a state
-func (c *Client) commentPrefix(tenant string, contentType string, contentID string, state State) string {
-	return path.Join(c.root, "tenants", tenant, "content", contentType, fmt.Sprintf("_%s", state), "_comments", contentID) + "/"
+func (s *S3Storage) commentPrefix(tenant string, contentType string, contentID string, state State) string {
+	return path.Join(s.root, "tenants", tenant, "content", contentType, fmt.Sprintf("_%s", state), "_comments", contentID) + "/"
 }
 
 // globalSchemaKey constructs the S3 key for a global schema
-func (c *Client) globalSchemaKey(schemaName string) string {
-	return path.Join(c.root, "schemas", fmt.Sprintf("%s.json", schemaName))
+func (s *S3Storage) globalSchemaKey(schemaName string) string {
+	return path.Join(s.root, "schemas", fmt.Sprintf("%s.json", schemaName))
 }
 
 // tenantSchemaKey constructs the S3 key for a tenant-specific schema
-func (c *Client) tenantSchemaKey(tenant string, schemaName string) string {
-	return path.Join(c.root, "tenants", tenant, "schemas", fmt.Sprintf("%s.json", schemaName))
+func (s *S3Storage) tenantSchemaKey(tenant string, schemaName string) string {
+	return path.Join(s.root, "tenants", tenant, "schemas", fmt.Sprintf("%s.json", schemaName))
 }
 
 // globalSchemasPrefix returns the prefix for listing global schemas
-func (c *Client) globalSchemasPrefix() string {
-	return path.Join(c.root, "schemas") + "/"
+func (s *S3Storage) globalSchemasPrefix() string {
+	return path.Join(s.root, "schemas") + "/"
 }
 
 // tenantSchemasPrefix returns the prefix for listing tenant schemas
-func (c *Client) tenantSchemasPrefix(tenant string) string {
-	return path.Join(c.root, "tenants", tenant, "schemas") + "/"
+func (s *S3Storage) tenantSchemasPrefix(tenant string) string {
+	return path.Join(s.root, "tenants", tenant, "schemas") + "/"
 }
 
 // =============================================================================
@@ -259,20 +160,20 @@ func (c *Client) tenantSchemasPrefix(tenant string) string {
 // =============================================================================
 
 // Put stores content in S3/Wasabi with a specific state
-func (c *Client) Put(ctx context.Context, tenant string, contentType string, id string, ext string, content []byte, mimeType string, state State) (*ContentItem, error) {
+func (s *S3Storage) Put(ctx context.Context, tenant string, contentType string, id string, ext string, content []byte, mimeType string, state State) (*ContentItem, error) {
 	if state == "" {
 		state = StateLive
 	}
-	key := c.contentKey(tenant, contentType, id, ext, state)
+	key := s.contentKey(tenant, contentType, id, ext, state)
 
 	input := &s3.PutObjectInput{
-		Bucket:      aws.String(c.bucket),
+		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(content),
 		ContentType: aws.String(mimeType),
 	}
 
-	result, err := c.s3Client.PutObject(ctx, input)
+	result, err := s.s3Client.PutObject(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to put object: %w", err)
 	}
@@ -291,14 +192,14 @@ func (c *Client) Put(ctx context.Context, tenant string, contentType string, id 
 }
 
 // PutStream stores content from a reader in S3/Wasabi with a specific state
-func (c *Client) PutStream(ctx context.Context, tenant string, contentType string, id string, ext string, body io.Reader, contentLength int64, mimeType string, state State, metadata map[string]string) (*ContentItem, error) {
+func (s *S3Storage) PutStream(ctx context.Context, tenant string, contentType string, id string, ext string, body io.Reader, contentLength int64, mimeType string, state State, metadata map[string]string) (*ContentItem, error) {
 	if state == "" {
 		state = StateLive
 	}
-	key := c.contentKey(tenant, contentType, id, ext, state)
+	key := s.contentKey(tenant, contentType, id, ext, state)
 
 	input := &s3.PutObjectInput{
-		Bucket:        aws.String(c.bucket),
+		Bucket:        aws.String(s.bucket),
 		Key:           aws.String(key),
 		Body:          body,
 		ContentLength: aws.Int64(contentLength),
@@ -310,7 +211,7 @@ func (c *Client) PutStream(ctx context.Context, tenant string, contentType strin
 		input.Metadata = metadata
 	}
 
-	result, err := c.s3Client.PutObject(ctx, input)
+	result, err := s.s3Client.PutObject(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to put object: %w", err)
 	}
@@ -330,21 +231,21 @@ func (c *Client) PutStream(ctx context.Context, tenant string, contentType strin
 }
 
 // Get retrieves content from S3/Wasabi with a specific state (defaults to live)
-func (c *Client) Get(ctx context.Context, tenant string, contentType string, id string, ext string, state State) (*ContentItem, error) {
+func (s *S3Storage) Get(ctx context.Context, tenant string, contentType string, id string, ext string, state State) (*ContentItem, error) {
 	if state == "" {
 		state = StateLive
 	}
-	key := c.contentKey(tenant, contentType, id, ext, state)
-	return c.getByKey(ctx, key, "")
+	key := s.contentKey(tenant, contentType, id, ext, state)
+	return s.getByKey(ctx, key, "")
 }
 
 // GetStream retrieves content as a stream from S3/Wasabi (caller must close Body)
-func (c *Client) GetStream(ctx context.Context, tenant string, contentType string, id string, ext string, state State) (*ContentStream, error) {
+func (s *S3Storage) GetStream(ctx context.Context, tenant string, contentType string, id string, ext string, state State) (*ContentStream, error) {
 	if state == "" {
 		state = StateLive
 	}
-	key := c.contentKey(tenant, contentType, id, ext, state)
-	return c.getStreamByKey(ctx, key, "")
+	key := s.contentKey(tenant, contentType, id, ext, state)
+	return s.getStreamByKey(ctx, key, "")
 }
 
 // FindContentStream finds and retrieves content with flexible extension resolution.
@@ -353,7 +254,7 @@ func (c *Client) GetStream(ctx context.Context, tenant string, contentType strin
 // 2. If extHint provided, try that extension
 // 3. Try common extensions: .html, .json, then no extension
 // 4. Fall back to first matching file with any extension
-func (c *Client) FindContentStream(ctx context.Context, tenant string, contentType string, id string, extHint string, state State) (*ContentStream, error) {
+func (s *S3Storage) FindContentStream(ctx context.Context, tenant string, contentType string, id string, extHint string, state State) (*ContentStream, error) {
 	if state == "" {
 		state = StateLive
 	}
@@ -362,8 +263,8 @@ func (c *Client) FindContentStream(ctx context.Context, tenant string, contentTy
 	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
 		ext := id[idx+1:]
 		baseID := id[:idx]
-		key := c.contentKey(tenant, contentType, baseID, ext, state)
-		return c.getStreamByKey(ctx, key, "")
+		key := s.contentKey(tenant, contentType, baseID, ext, state)
+		return s.getStreamByKey(ctx, key, "")
 	}
 
 	// Build list of extensions to try
@@ -383,44 +284,44 @@ func (c *Client) FindContentStream(ctx context.Context, tenant string, contentTy
 
 	// Try each extension
 	for _, ext := range extsToTry {
-		key := c.contentKey(tenant, contentType, id, ext, state)
-		stream, err := c.getStreamByKey(ctx, key, "")
+		key := s.contentKey(tenant, contentType, id, ext, state)
+		stream, err := s.getStreamByKey(ctx, key, "")
 		if err == nil {
 			return stream, nil
 		}
 	}
 
 	// Fall back: list prefix and find first match
-	prefix := c.contentPrefix(tenant, contentType, state) + id + "."
+	prefix := s.contentPrefix(tenant, contentType, state) + id + "."
 	input := &s3.ListObjectsV2Input{
-		Bucket:  aws.String(c.bucket),
+		Bucket:  aws.String(s.bucket),
 		Prefix:  aws.String(prefix),
 		MaxKeys: aws.Int32(1),
 	}
 
-	result, err := c.s3Client.ListObjectsV2(ctx, input)
+	result, err := s.s3Client.ListObjectsV2(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list objects: %w", err)
 	}
 
 	if len(result.Contents) > 0 {
 		key := aws.ToString(result.Contents[0].Key)
-		return c.getStreamByKey(ctx, key, "")
+		return s.getStreamByKey(ctx, key, "")
 	}
 
 	return nil, fmt.Errorf("content '%s' not found", id)
 }
 
 // GetVersionStream retrieves a specific version as a stream (caller must close Body)
-func (c *Client) GetVersionStream(ctx context.Context, tenant string, contentType string, id string, ext string, versionID string) (*ContentStream, error) {
-	key := c.contentKey(tenant, contentType, id, ext, StateLive)
-	return c.getStreamByKey(ctx, key, versionID)
+func (s *S3Storage) GetVersionStream(ctx context.Context, tenant string, contentType string, id string, ext string, versionID string) (*ContentStream, error) {
+	key := s.contentKey(tenant, contentType, id, ext, StateLive)
+	return s.getStreamByKey(ctx, key, versionID)
 }
 
 // getStreamByKey retrieves content as a stream by its full S3 key
-func (c *Client) getStreamByKey(ctx context.Context, key string, versionID string) (*ContentStream, error) {
+func (s *S3Storage) getStreamByKey(ctx context.Context, key string, versionID string) (*ContentStream, error) {
 	input := &s3.GetObjectInput{
-		Bucket: aws.String(c.bucket),
+		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	}
 
@@ -428,7 +329,7 @@ func (c *Client) getStreamByKey(ctx context.Context, key string, versionID strin
 		input.VersionId = aws.String(versionID)
 	}
 
-	result, err := c.s3Client.GetObject(ctx, input)
+	result, err := s.s3Client.GetObject(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object: %w", err)
 	}
@@ -471,15 +372,15 @@ func (c *Client) getStreamByKey(ctx context.Context, key string, versionID strin
 }
 
 // GetVersion retrieves a specific version of live content
-func (c *Client) GetVersion(ctx context.Context, tenant string, contentType string, id string, ext string, versionID string) (*ContentItem, error) {
-	key := c.contentKey(tenant, contentType, id, ext, StateLive)
-	return c.getByKey(ctx, key, versionID)
+func (s *S3Storage) GetVersion(ctx context.Context, tenant string, contentType string, id string, ext string, versionID string) (*ContentItem, error) {
+	key := s.contentKey(tenant, contentType, id, ext, StateLive)
+	return s.getByKey(ctx, key, versionID)
 }
 
 // getByKey retrieves content by its full S3 key
-func (c *Client) getByKey(ctx context.Context, key string, versionID string) (*ContentItem, error) {
+func (s *S3Storage) getByKey(ctx context.Context, key string, versionID string) (*ContentItem, error) {
 	input := &s3.GetObjectInput{
-		Bucket: aws.String(c.bucket),
+		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	}
 
@@ -487,7 +388,7 @@ func (c *Client) getByKey(ctx context.Context, key string, versionID string) (*C
 		input.VersionId = aws.String(versionID)
 	}
 
-	result, err := c.s3Client.GetObject(ctx, input)
+	result, err := s.s3Client.GetObject(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object: %w", err)
 	}
@@ -535,14 +436,14 @@ func (c *Client) getByKey(ctx context.Context, key string, versionID string) (*C
 }
 
 // Delete removes content from S3/Wasabi with a specific state
-func (c *Client) Delete(ctx context.Context, tenant string, contentType string, id string, ext string, state State) error {
+func (s *S3Storage) Delete(ctx context.Context, tenant string, contentType string, id string, ext string, state State) error {
 	if state == "" {
 		state = StateLive
 	}
-	key := c.contentKey(tenant, contentType, id, ext, state)
+	key := s.contentKey(tenant, contentType, id, ext, state)
 
-	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(c.bucket),
+	_, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -553,19 +454,19 @@ func (c *Client) Delete(ctx context.Context, tenant string, contentType string, 
 }
 
 // List returns all content items of a specific type for a tenant with state (defaults to live)
-func (c *Client) List(ctx context.Context, tenant string, contentType string, state State) ([]*ContentItem, error) {
+func (s *S3Storage) List(ctx context.Context, tenant string, contentType string, state State) ([]*ContentItem, error) {
 	if state == "" {
 		state = StateLive
 	}
-	prefix := c.contentPrefix(tenant, contentType, state)
+	prefix := s.contentPrefix(tenant, contentType, state)
 
 	input := &s3.ListObjectsV2Input{
-		Bucket: aws.String(c.bucket),
+		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(prefix),
 	}
 
 	var items []*ContentItem
-	paginator := s3.NewListObjectsV2Paginator(c.s3Client, input)
+	paginator := s3.NewListObjectsV2Paginator(s.s3Client, input)
 
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
@@ -612,15 +513,15 @@ func (c *Client) List(ctx context.Context, tenant string, contentType string, st
 }
 
 // ListVersions returns all versions of a specific live content item (only live content is versioned)
-func (c *Client) ListVersions(ctx context.Context, tenant string, contentType string, id string, ext string) ([]*ContentVersion, error) {
-	key := c.contentKey(tenant, contentType, id, ext, StateLive)
+func (s *S3Storage) ListVersions(ctx context.Context, tenant string, contentType string, id string, ext string) ([]*ContentVersion, error) {
+	key := s.contentKey(tenant, contentType, id, ext, StateLive)
 
 	input := &s3.ListObjectVersionsInput{
-		Bucket: aws.String(c.bucket),
+		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(key),
 	}
 
-	result, err := c.s3Client.ListObjectVersions(ctx, input)
+	result, err := s.s3Client.ListObjectVersions(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list versions: %w", err)
 	}
@@ -656,26 +557,26 @@ func (c *Client) ListVersions(ctx context.Context, tenant string, contentType st
 }
 
 // RestoreVersion restores a specific version of live content by copying it as the latest version
-func (c *Client) RestoreVersion(ctx context.Context, tenant string, contentType string, id string, ext string, versionID string) (*ContentItem, error) {
-	key := c.contentKey(tenant, contentType, id, ext, StateLive)
+func (s *S3Storage) RestoreVersion(ctx context.Context, tenant string, contentType string, id string, ext string, versionID string) (*ContentItem, error) {
+	key := s.contentKey(tenant, contentType, id, ext, StateLive)
 
 	// Get the specific version
-	item, err := c.getByKey(ctx, key, versionID)
+	item, err := s.getByKey(ctx, key, versionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get version: %w", err)
 	}
 
 	// Copy it as the new latest version
-	copySource := fmt.Sprintf("%s/%s?versionId=%s", c.bucket, key, versionID)
+	copySource := fmt.Sprintf("%s/%s?versionId=%s", s.bucket, key, versionID)
 
 	copyInput := &s3.CopyObjectInput{
-		Bucket:            aws.String(c.bucket),
+		Bucket:            aws.String(s.bucket),
 		CopySource:        aws.String(copySource),
 		Key:               aws.String(key),
 		MetadataDirective: types.MetadataDirectiveCopy,
 	}
 
-	copyResult, err := c.s3Client.CopyObject(ctx, copyInput)
+	copyResult, err := s.s3Client.CopyObject(ctx, copyInput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to restore version: %w", err)
 	}
@@ -694,14 +595,14 @@ func (c *Client) RestoreVersion(ctx context.Context, tenant string, contentType 
 }
 
 // Exists checks if a content item exists with a specific state
-func (c *Client) Exists(ctx context.Context, tenant string, contentType string, id string, ext string, state State) (bool, error) {
+func (s *S3Storage) Exists(ctx context.Context, tenant string, contentType string, id string, ext string, state State) (bool, error) {
 	if state == "" {
 		state = StateLive
 	}
-	key := c.contentKey(tenant, contentType, id, ext, state)
+	key := s.contentKey(tenant, contentType, id, ext, state)
 
-	_, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(c.bucket),
+	_, err := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -716,14 +617,14 @@ func (c *Client) Exists(ctx context.Context, tenant string, contentType string, 
 // The source state content is deleted after successful transition
 // Transition is blocked if there are unresolved comments on the source state
 // All comments are deleted from source state after successful transition
-func (c *Client) Transition(ctx context.Context, tenant string, contentType string, id string, ext string, fromState State, toState State) (*ContentItem, error) {
+func (s *S3Storage) Transition(ctx context.Context, tenant string, contentType string, id string, ext string, fromState State, toState State) (*ContentItem, error) {
 	if fromState == toState {
 		return nil, fmt.Errorf("source and target states are the same")
 	}
 
 	// Check for unresolved comments (only on draft/pending states)
 	if fromState != StateLive {
-		hasUnresolved, err := c.HasUnresolvedComments(ctx, tenant, contentType, id, fromState)
+		hasUnresolved, err := s.HasUnresolvedComments(ctx, tenant, contentType, id, fromState)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check comments: %w", err)
 		}
@@ -733,26 +634,26 @@ func (c *Client) Transition(ctx context.Context, tenant string, contentType stri
 	}
 
 	// Get the content from source state
-	sourceItem, err := c.Get(ctx, tenant, contentType, id, ext, fromState)
+	sourceItem, err := s.Get(ctx, tenant, contentType, id, ext, fromState)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get content from %s state: %w", fromState, err)
 	}
 
 	// Put it in the target state
-	targetItem, err := c.Put(ctx, tenant, contentType, id, ext, sourceItem.Content, sourceItem.ContentType, toState)
+	targetItem, err := s.Put(ctx, tenant, contentType, id, ext, sourceItem.Content, sourceItem.ContentType, toState)
 	if err != nil {
 		return nil, fmt.Errorf("failed to put content to %s state: %w", toState, err)
 	}
 
 	// Delete from source state
-	if err := c.Delete(ctx, tenant, contentType, id, ext, fromState); err != nil {
+	if err := s.Delete(ctx, tenant, contentType, id, ext, fromState); err != nil {
 		// Log but don't fail - content is already in target state
 		log.Error("Failed to delete content from %s state: %v", fromState, err)
 	}
 
 	// Delete all comments from source state (they were all resolved)
 	if fromState != StateLive {
-		if err := c.DeleteAllComments(ctx, tenant, contentType, id, fromState); err != nil {
+		if err := s.DeleteAllComments(ctx, tenant, contentType, id, fromState); err != nil {
 			log.Error("Failed to delete comments from %s state: %v", fromState, err)
 		}
 	}
@@ -765,16 +666,16 @@ func (c *Client) Transition(ctx context.Context, tenant string, contentType stri
 // =============================================================================
 
 // PutHistoryRecord stores a history record for a version
-func (c *Client) PutHistoryRecord(ctx context.Context, tenant string, contentType string, id string, record *HistoryRecord) error {
-	key := c.historyKey(tenant, contentType, id, record.Version)
+func (s *S3Storage) PutHistoryRecord(ctx context.Context, tenant string, contentType string, id string, record *HistoryRecord) error {
+	key := s.historyKey(tenant, contentType, id, record.Version)
 
 	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("failed to marshal history record: %w", err)
 	}
 
-	_, err = c.s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(c.bucket),
+	_, err = s.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(data),
 		ContentType: aws.String("application/json"),
@@ -787,10 +688,10 @@ func (c *Client) PutHistoryRecord(ctx context.Context, tenant string, contentTyp
 }
 
 // GetHistoryRecord retrieves a history record for a version
-func (c *Client) GetHistoryRecord(ctx context.Context, tenant string, contentType string, id string, version string) (*HistoryRecord, error) {
-	key := c.historyKey(tenant, contentType, id, version)
+func (s *S3Storage) GetHistoryRecord(ctx context.Context, tenant string, contentType string, id string, version string) (*HistoryRecord, error) {
+	key := s.historyKey(tenant, contentType, id, version)
 
-	item, err := c.getByKey(ctx, key, "")
+	item, err := s.getByKey(ctx, key, "")
 	if err != nil {
 		return nil, fmt.Errorf("history record not found: %w", err)
 	}
@@ -804,16 +705,16 @@ func (c *Client) GetHistoryRecord(ctx context.Context, tenant string, contentTyp
 }
 
 // ListHistoryRecords returns all history records for a content item
-func (c *Client) ListHistoryRecords(ctx context.Context, tenant string, contentType string, id string) ([]*HistoryRecord, error) {
-	prefix := c.historyPrefix(tenant, contentType, id)
+func (s *S3Storage) ListHistoryRecords(ctx context.Context, tenant string, contentType string, id string) ([]*HistoryRecord, error) {
+	prefix := s.historyPrefix(tenant, contentType, id)
 
 	input := &s3.ListObjectsV2Input{
-		Bucket: aws.String(c.bucket),
+		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(prefix),
 	}
 
 	var records []*HistoryRecord
-	paginator := s3.NewListObjectsV2Paginator(c.s3Client, input)
+	paginator := s3.NewListObjectsV2Paginator(s.s3Client, input)
 
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
@@ -827,7 +728,7 @@ func (c *Client) ListHistoryRecords(ctx context.Context, tenant string, contentT
 			}
 
 			// Get the full record
-			item, err := c.getByKey(ctx, *obj.Key, "")
+			item, err := s.getByKey(ctx, *obj.Key, "")
 			if err != nil {
 				continue
 			}
@@ -845,8 +746,8 @@ func (c *Client) ListHistoryRecords(ctx context.Context, tenant string, contentT
 }
 
 // GetLatestHistoryVersion returns the most recent version ID from history
-func (c *Client) GetLatestHistoryVersion(ctx context.Context, tenant string, contentType string, id string) (string, error) {
-	records, err := c.ListHistoryRecords(ctx, tenant, contentType, id)
+func (s *S3Storage) GetLatestHistoryVersion(ctx context.Context, tenant string, contentType string, id string) (string, error) {
+	records, err := s.ListHistoryRecords(ctx, tenant, contentType, id)
 	if err != nil {
 		return "", err
 	}
@@ -871,10 +772,10 @@ func (c *Client) GetLatestHistoryVersion(ctx context.Context, tenant string, con
 // =============================================================================
 
 // GetSchema retrieves a schema, checking tenant-specific first then falling back to global
-func (c *Client) GetSchema(ctx context.Context, tenant string, schemaName string) (*Schema, error) {
+func (s *S3Storage) GetSchema(ctx context.Context, tenant string, schemaName string) (*Schema, error) {
 	// Try tenant-specific schema first
-	tenantKey := c.tenantSchemaKey(tenant, schemaName)
-	item, err := c.getByKey(ctx, tenantKey, "")
+	tenantKey := s.tenantSchemaKey(tenant, schemaName)
+	item, err := s.getByKey(ctx, tenantKey, "")
 	if err == nil {
 		return &Schema{
 			Name:     schemaName,
@@ -884,8 +785,8 @@ func (c *Client) GetSchema(ctx context.Context, tenant string, schemaName string
 	}
 
 	// Fall back to global schema
-	globalKey := c.globalSchemaKey(schemaName)
-	item, err = c.getByKey(ctx, globalKey, "")
+	globalKey := s.globalSchemaKey(schemaName)
+	item, err = s.getByKey(ctx, globalKey, "")
 	if err != nil {
 		return nil, fmt.Errorf("schema not found: %s", schemaName)
 	}
@@ -898,9 +799,9 @@ func (c *Client) GetSchema(ctx context.Context, tenant string, schemaName string
 }
 
 // GetGlobalSchema retrieves a global schema
-func (c *Client) GetGlobalSchema(ctx context.Context, schemaName string) (*Schema, error) {
-	key := c.globalSchemaKey(schemaName)
-	item, err := c.getByKey(ctx, key, "")
+func (s *S3Storage) GetGlobalSchema(ctx context.Context, schemaName string) (*Schema, error) {
+	key := s.globalSchemaKey(schemaName)
+	item, err := s.getByKey(ctx, key, "")
 	if err != nil {
 		return nil, fmt.Errorf("global schema not found: %s", schemaName)
 	}
@@ -913,9 +814,9 @@ func (c *Client) GetGlobalSchema(ctx context.Context, schemaName string) (*Schem
 }
 
 // GetTenantSchema retrieves a tenant-specific schema (not falling back to global)
-func (c *Client) GetTenantSchema(ctx context.Context, tenant string, schemaName string) (*Schema, error) {
-	key := c.tenantSchemaKey(tenant, schemaName)
-	item, err := c.getByKey(ctx, key, "")
+func (s *S3Storage) GetTenantSchema(ctx context.Context, tenant string, schemaName string) (*Schema, error) {
+	key := s.tenantSchemaKey(tenant, schemaName)
+	item, err := s.getByKey(ctx, key, "")
 	if err != nil {
 		return nil, fmt.Errorf("tenant schema not found: %s", schemaName)
 	}
@@ -928,11 +829,11 @@ func (c *Client) GetTenantSchema(ctx context.Context, tenant string, schemaName 
 }
 
 // PutGlobalSchema stores a global schema
-func (c *Client) PutGlobalSchema(ctx context.Context, schemaName string, content []byte) error {
-	key := c.globalSchemaKey(schemaName)
+func (s *S3Storage) PutGlobalSchema(ctx context.Context, schemaName string, content []byte) error {
+	key := s.globalSchemaKey(schemaName)
 
-	_, err := c.s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(c.bucket),
+	_, err := s.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(content),
 		ContentType: aws.String("application/json"),
@@ -945,11 +846,11 @@ func (c *Client) PutGlobalSchema(ctx context.Context, schemaName string, content
 }
 
 // PutTenantSchema stores a tenant-specific schema
-func (c *Client) PutTenantSchema(ctx context.Context, tenant string, schemaName string, content []byte) error {
-	key := c.tenantSchemaKey(tenant, schemaName)
+func (s *S3Storage) PutTenantSchema(ctx context.Context, tenant string, schemaName string, content []byte) error {
+	key := s.tenantSchemaKey(tenant, schemaName)
 
-	_, err := c.s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(c.bucket),
+	_, err := s.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(content),
 		ContentType: aws.String("application/json"),
@@ -962,11 +863,11 @@ func (c *Client) PutTenantSchema(ctx context.Context, tenant string, schemaName 
 }
 
 // DeleteGlobalSchema removes a global schema
-func (c *Client) DeleteGlobalSchema(ctx context.Context, schemaName string) error {
-	key := c.globalSchemaKey(schemaName)
+func (s *S3Storage) DeleteGlobalSchema(ctx context.Context, schemaName string) error {
+	key := s.globalSchemaKey(schemaName)
 
-	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(c.bucket),
+	_, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -977,11 +878,11 @@ func (c *Client) DeleteGlobalSchema(ctx context.Context, schemaName string) erro
 }
 
 // DeleteTenantSchema removes a tenant-specific schema
-func (c *Client) DeleteTenantSchema(ctx context.Context, tenant string, schemaName string) error {
-	key := c.tenantSchemaKey(tenant, schemaName)
+func (s *S3Storage) DeleteTenantSchema(ctx context.Context, tenant string, schemaName string) error {
+	key := s.tenantSchemaKey(tenant, schemaName)
 
-	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(c.bucket),
+	_, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -992,27 +893,27 @@ func (c *Client) DeleteTenantSchema(ctx context.Context, tenant string, schemaNa
 }
 
 // ListGlobalSchemas returns all global schema names
-func (c *Client) ListGlobalSchemas(ctx context.Context) ([]string, error) {
-	prefix := c.globalSchemasPrefix()
-	return c.listSchemaNames(ctx, prefix)
+func (s *S3Storage) ListGlobalSchemas(ctx context.Context) ([]string, error) {
+	prefix := s.globalSchemasPrefix()
+	return s.listSchemaNames(ctx, prefix)
 }
 
 // ListTenantSchemas returns all tenant-specific schema names
-func (c *Client) ListTenantSchemas(ctx context.Context, tenant string) ([]string, error) {
-	prefix := c.tenantSchemasPrefix(tenant)
-	return c.listSchemaNames(ctx, prefix)
+func (s *S3Storage) ListTenantSchemas(ctx context.Context, tenant string) ([]string, error) {
+	prefix := s.tenantSchemasPrefix(tenant)
+	return s.listSchemaNames(ctx, prefix)
 }
 
 // ListAllSchemas returns all available schemas for a tenant (global + tenant overrides merged)
-func (c *Client) ListAllSchemas(ctx context.Context, tenant string) ([]string, error) {
+func (s *S3Storage) ListAllSchemas(ctx context.Context, tenant string) ([]string, error) {
 	// Get global schemas
-	globalSchemas, err := c.ListGlobalSchemas(ctx)
+	globalSchemas, err := s.ListGlobalSchemas(ctx)
 	if err != nil {
 		globalSchemas = []string{}
 	}
 
 	// Get tenant schemas
-	tenantSchemas, err := c.ListTenantSchemas(ctx, tenant)
+	tenantSchemas, err := s.ListTenantSchemas(ctx, tenant)
 	if err != nil {
 		tenantSchemas = []string{}
 	}
@@ -1035,14 +936,14 @@ func (c *Client) ListAllSchemas(ctx context.Context, tenant string) ([]string, e
 }
 
 // listSchemaNames helper to list schema names from a prefix
-func (c *Client) listSchemaNames(ctx context.Context, prefix string) ([]string, error) {
+func (s *S3Storage) listSchemaNames(ctx context.Context, prefix string) ([]string, error) {
 	input := &s3.ListObjectsV2Input{
-		Bucket: aws.String(c.bucket),
+		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(prefix),
 	}
 
 	var schemas []string
-	paginator := s3.NewListObjectsV2Paginator(c.s3Client, input)
+	paginator := s3.NewListObjectsV2Paginator(s.s3Client, input)
 
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
@@ -1066,8 +967,8 @@ func (c *Client) listSchemaNames(ctx context.Context, prefix string) ([]string, 
 }
 
 // SchemaExists checks if a schema exists (tenant or global)
-func (c *Client) SchemaExists(ctx context.Context, tenant string, schemaName string) (bool, error) {
-	_, err := c.GetSchema(ctx, tenant, schemaName)
+func (s *S3Storage) SchemaExists(ctx context.Context, tenant string, schemaName string) (bool, error) {
+	_, err := s.GetSchema(ctx, tenant, schemaName)
 	if err != nil {
 		return false, nil
 	}
@@ -1079,20 +980,20 @@ func (c *Client) SchemaExists(ctx context.Context, tenant string, schemaName str
 // =============================================================================
 
 // PutComment stores a comment for a content item in a specific state
-func (c *Client) PutComment(ctx context.Context, tenant string, contentType string, contentID string, state State, comment *Comment) error {
+func (s *S3Storage) PutComment(ctx context.Context, tenant string, contentType string, contentID string, state State, comment *Comment) error {
 	if state == StateLive {
 		return fmt.Errorf("comments are only allowed on draft or pending content")
 	}
 
-	key := c.commentKey(tenant, contentType, contentID, state, comment.ID)
+	key := s.commentKey(tenant, contentType, contentID, state, comment.ID)
 
 	data, err := json.Marshal(comment)
 	if err != nil {
 		return fmt.Errorf("failed to marshal comment: %w", err)
 	}
 
-	_, err = c.s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(c.bucket),
+	_, err = s.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(data),
 		ContentType: aws.String("application/json"),
@@ -1105,10 +1006,10 @@ func (c *Client) PutComment(ctx context.Context, tenant string, contentType stri
 }
 
 // GetComment retrieves a specific comment
-func (c *Client) GetComment(ctx context.Context, tenant string, contentType string, contentID string, state State, id string) (*Comment, error) {
-	key := c.commentKey(tenant, contentType, contentID, state, id)
+func (s *S3Storage) GetComment(ctx context.Context, tenant string, contentType string, contentID string, state State, id string) (*Comment, error) {
+	key := s.commentKey(tenant, contentType, contentID, state, id)
 
-	item, err := c.getByKey(ctx, key, "")
+	item, err := s.getByKey(ctx, key, "")
 	if err != nil {
 		return nil, fmt.Errorf("comment not found: %w", err)
 	}
@@ -1122,16 +1023,16 @@ func (c *Client) GetComment(ctx context.Context, tenant string, contentType stri
 }
 
 // ListComments returns all comments for a content item in a specific state
-func (c *Client) ListComments(ctx context.Context, tenant string, contentType string, contentID string, state State) ([]*Comment, error) {
-	prefix := c.commentPrefix(tenant, contentType, contentID, state)
+func (s *S3Storage) ListComments(ctx context.Context, tenant string, contentType string, contentID string, state State) ([]*Comment, error) {
+	prefix := s.commentPrefix(tenant, contentType, contentID, state)
 
 	input := &s3.ListObjectsV2Input{
-		Bucket: aws.String(c.bucket),
+		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(prefix),
 	}
 
 	var comments []*Comment
-	paginator := s3.NewListObjectsV2Paginator(c.s3Client, input)
+	paginator := s3.NewListObjectsV2Paginator(s.s3Client, input)
 
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
@@ -1144,7 +1045,7 @@ func (c *Client) ListComments(ctx context.Context, tenant string, contentType st
 				continue
 			}
 
-			item, err := c.getByKey(ctx, *obj.Key, "")
+			item, err := s.getByKey(ctx, *obj.Key, "")
 			if err != nil {
 				continue
 			}
@@ -1162,11 +1063,11 @@ func (c *Client) ListComments(ctx context.Context, tenant string, contentType st
 }
 
 // DeleteComment removes a comment
-func (c *Client) DeleteComment(ctx context.Context, tenant string, contentType string, contentID string, state State, id string) error {
-	key := c.commentKey(tenant, contentType, contentID, state, id)
+func (s *S3Storage) DeleteComment(ctx context.Context, tenant string, contentType string, contentID string, state State, id string) error {
+	key := s.commentKey(tenant, contentType, contentID, state, id)
 
-	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(c.bucket),
+	_, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -1177,14 +1078,14 @@ func (c *Client) DeleteComment(ctx context.Context, tenant string, contentType s
 }
 
 // DeleteAllComments removes all comments for a content item in a state
-func (c *Client) DeleteAllComments(ctx context.Context, tenant string, contentType string, contentID string, state State) error {
-	comments, err := c.ListComments(ctx, tenant, contentType, contentID, state)
+func (s *S3Storage) DeleteAllComments(ctx context.Context, tenant string, contentType string, contentID string, state State) error {
+	comments, err := s.ListComments(ctx, tenant, contentType, contentID, state)
 	if err != nil {
 		return err
 	}
 
 	for _, comment := range comments {
-		if err := c.DeleteComment(ctx, tenant, contentType, contentID, state, comment.ID); err != nil {
+		if err := s.DeleteComment(ctx, tenant, contentType, contentID, state, comment.ID); err != nil {
 			// Log but continue deleting others
 			log.Error("Failed to delete comment %s: %v", comment.ID, err)
 		}
@@ -1194,8 +1095,8 @@ func (c *Client) DeleteAllComments(ctx context.Context, tenant string, contentTy
 }
 
 // HasUnresolvedComments checks if there are any unresolved comments
-func (c *Client) HasUnresolvedComments(ctx context.Context, tenant string, contentType string, contentID string, state State) (bool, error) {
-	comments, err := c.ListComments(ctx, tenant, contentType, contentID, state)
+func (s *S3Storage) HasUnresolvedComments(ctx context.Context, tenant string, contentType string, contentID string, state State) (bool, error) {
+	comments, err := s.ListComments(ctx, tenant, contentType, contentID, state)
 	if err != nil {
 		return false, err
 	}
@@ -1214,25 +1115,25 @@ func (c *Client) HasUnresolvedComments(ctx context.Context, tenant string, conte
 // =============================================================================
 
 // webhookKey constructs the S3 key for a webhook
-func (c *Client) webhookKey(tenant string, webhookID string) string {
-	return path.Join(c.root, "tenants", tenant, "webhooks", webhookID+".json")
+func (s *S3Storage) webhookKey(tenant string, webhookID string) string {
+	return path.Join(s.root, "tenants", tenant, "webhooks", webhookID+".json")
 }
 
 // webhookPrefix returns the prefix for listing webhooks
-func (c *Client) webhookPrefix(tenant string) string {
-	return path.Join(c.root, "tenants", tenant, "webhooks") + "/"
+func (s *S3Storage) webhookPrefix(tenant string) string {
+	return path.Join(s.root, "tenants", tenant, "webhooks") + "/"
 }
 
 // ListWebhooks lists all webhooks for a tenant
-func (c *Client) ListWebhooks(ctx context.Context, tenant string) ([]*Webhook, error) {
-	prefix := c.webhookPrefix(tenant)
+func (s *S3Storage) ListWebhooks(ctx context.Context, tenant string) ([]*Webhook, error) {
+	prefix := s.webhookPrefix(tenant)
 
 	input := &s3.ListObjectsV2Input{
-		Bucket: aws.String(c.bucket),
+		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(prefix),
 	}
 
-	result, err := c.s3Client.ListObjectsV2(ctx, input)
+	result, err := s.s3Client.ListObjectsV2(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list webhooks: %w", err)
 	}
@@ -1247,7 +1148,7 @@ func (c *Client) ListWebhooks(ctx context.Context, tenant string) ([]*Webhook, e
 		}
 		webhookID := strings.TrimSuffix(filename, ".json")
 
-		webhook, err := c.GetWebhook(ctx, tenant, webhookID)
+		webhook, err := s.GetWebhook(ctx, tenant, webhookID)
 		if err != nil {
 			log.Error("Failed to get webhook %s: %v", webhookID, err)
 			continue
@@ -1259,11 +1160,11 @@ func (c *Client) ListWebhooks(ctx context.Context, tenant string) ([]*Webhook, e
 }
 
 // GetWebhook retrieves a webhook by ID
-func (c *Client) GetWebhook(ctx context.Context, tenant string, webhookID string) (*Webhook, error) {
-	key := c.webhookKey(tenant, webhookID)
+func (s *S3Storage) GetWebhook(ctx context.Context, tenant string, webhookID string) (*Webhook, error) {
+	key := s.webhookKey(tenant, webhookID)
 
-	result, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(c.bucket),
+	result, err := s.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -1281,16 +1182,16 @@ func (c *Client) GetWebhook(ctx context.Context, tenant string, webhookID string
 }
 
 // PutWebhook creates or updates a webhook
-func (c *Client) PutWebhook(ctx context.Context, tenant string, webhook *Webhook) error {
-	key := c.webhookKey(tenant, webhook.ID)
+func (s *S3Storage) PutWebhook(ctx context.Context, tenant string, webhook *Webhook) error {
+	key := s.webhookKey(tenant, webhook.ID)
 
 	data, err := json.Marshal(webhook)
 	if err != nil {
 		return fmt.Errorf("failed to marshal webhook: %w", err)
 	}
 
-	_, err = c.s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(c.bucket),
+	_, err = s.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(data),
 		ContentType: aws.String("application/json"),
@@ -1303,11 +1204,11 @@ func (c *Client) PutWebhook(ctx context.Context, tenant string, webhook *Webhook
 }
 
 // DeleteWebhook removes a webhook
-func (c *Client) DeleteWebhook(ctx context.Context, tenant string, webhookID string) error {
-	key := c.webhookKey(tenant, webhookID)
+func (s *S3Storage) DeleteWebhook(ctx context.Context, tenant string, webhookID string) error {
+	key := s.webhookKey(tenant, webhookID)
 
-	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(c.bucket),
+	_, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -1322,14 +1223,14 @@ func (c *Client) DeleteWebhook(ctx context.Context, tenant string, webhookID str
 // =============================================================================
 
 // GetMetadata retrieves only the metadata for a content item
-func (c *Client) GetMetadata(ctx context.Context, tenant string, contentType string, id string, ext string, state State) (map[string]string, error) {
+func (s *S3Storage) GetMetadata(ctx context.Context, tenant string, contentType string, id string, ext string, state State) (map[string]string, error) {
 	if state == "" {
 		state = StateLive
 	}
-	key := c.contentKey(tenant, contentType, id, ext, state)
+	key := s.contentKey(tenant, contentType, id, ext, state)
 
-	result, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(c.bucket),
+	result, err := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -1340,17 +1241,17 @@ func (c *Client) GetMetadata(ctx context.Context, tenant string, contentType str
 }
 
 // SetMetadata replaces all metadata on a content item (copies object to itself)
-func (c *Client) SetMetadata(ctx context.Context, tenant string, contentType string, id string, ext string, state State, metadata map[string]string) error {
+func (s *S3Storage) SetMetadata(ctx context.Context, tenant string, contentType string, id string, ext string, state State, metadata map[string]string) error {
 	if state == "" {
 		state = StateLive
 	}
-	key := c.contentKey(tenant, contentType, id, ext, state)
+	key := s.contentKey(tenant, contentType, id, ext, state)
 
 	// Copy object to itself with new metadata
-	copySource := fmt.Sprintf("%s/%s", c.bucket, key)
+	copySource := fmt.Sprintf("%s/%s", s.bucket, key)
 
-	_, err := c.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
-		Bucket:            aws.String(c.bucket),
+	_, err := s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:            aws.String(s.bucket),
 		CopySource:        aws.String(copySource),
 		Key:               aws.String(key),
 		Metadata:          metadata,
@@ -1364,13 +1265,13 @@ func (c *Client) SetMetadata(ctx context.Context, tenant string, contentType str
 }
 
 // UpdateMetadata merges new metadata with existing (copies object to itself)
-func (c *Client) UpdateMetadata(ctx context.Context, tenant string, contentType string, id string, ext string, state State, updates map[string]string) error {
+func (s *S3Storage) UpdateMetadata(ctx context.Context, tenant string, contentType string, id string, ext string, state State, updates map[string]string) error {
 	if state == "" {
 		state = StateLive
 	}
 
 	// Get existing metadata
-	existing, err := c.GetMetadata(ctx, tenant, contentType, id, ext, state)
+	existing, err := s.GetMetadata(ctx, tenant, contentType, id, ext, state)
 	if err != nil {
 		return err
 	}
@@ -1384,17 +1285,17 @@ func (c *Client) UpdateMetadata(ctx context.Context, tenant string, contentType 
 	}
 
 	// Set merged metadata
-	return c.SetMetadata(ctx, tenant, contentType, id, ext, state, existing)
+	return s.SetMetadata(ctx, tenant, contentType, id, ext, state, existing)
 }
 
 // DeleteMetadataKeys removes specific metadata keys (copies object to itself)
-func (c *Client) DeleteMetadataKeys(ctx context.Context, tenant string, contentType string, id string, ext string, state State, keys []string) error {
+func (s *S3Storage) DeleteMetadataKeys(ctx context.Context, tenant string, contentType string, id string, ext string, state State, keys []string) error {
 	if state == "" {
 		state = StateLive
 	}
 
 	// Get existing metadata
-	existing, err := c.GetMetadata(ctx, tenant, contentType, id, ext, state)
+	existing, err := s.GetMetadata(ctx, tenant, contentType, id, ext, state)
 	if err != nil {
 		return err
 	}
@@ -1405,5 +1306,5 @@ func (c *Client) DeleteMetadataKeys(ctx context.Context, tenant string, contentT
 	}
 
 	// Set updated metadata
-	return c.SetMetadata(ctx, tenant, contentType, id, ext, state, existing)
+	return s.SetMetadata(ctx, tenant, contentType, id, ext, state, existing)
 }

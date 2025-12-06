@@ -15,7 +15,7 @@ import (
 // Server represents the API server
 type Server struct {
 	router  *mux.Router
-	storage *storage.Client
+	storage storage.Storage
 	config  *ServerConfig
 }
 
@@ -25,7 +25,7 @@ type ServerConfig struct {
 }
 
 // NewServer creates a new API server
-func NewServer(storageClient *storage.Client, config *ServerConfig) *Server {
+func NewServer(storageClient storage.Storage, config *ServerConfig) *Server {
 	s := &Server{
 		router:  mux.NewRouter(),
 		storage: storageClient,
