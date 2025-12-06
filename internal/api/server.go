@@ -84,11 +84,9 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/content/{type}/{id}", s.updateContentHandler).Methods("PUT")
 	api.HandleFunc("/content/{type}/{id}", s.deleteContentHandler).Methods("DELETE")
 
-	// State-specific content routes
-	api.HandleFunc("/content/{type}/{id}/{state}", s.getContentHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}/{state}", s.createContentHandler).Methods("POST")
-	api.HandleFunc("/content/{type}/{id}/{state}", s.updateContentHandler).Methods("PUT")
-	api.HandleFunc("/content/{type}/{id}/{state}", s.deleteContentHandler).Methods("DELETE")
+	// IMPORTANT: Routes with literal path segments (like /metadata, /transition, /versions, /history)
+	// MUST be registered BEFORE routes with variable segments (like /{state}) because gorilla mux
+	// matches routes in registration order, not by specificity.
 
 	// State transition route
 	// POST   /api/content/{type}/{id}/transition - Move content between states (draft->pending->live)
@@ -122,6 +120,12 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/content/{type}/{id}/metadata", s.setMetadataHandler).Methods("PUT")
 	api.HandleFunc("/content/{type}/{id}/metadata", s.updateMetadataHandler).Methods("PATCH")
 	api.HandleFunc("/content/{type}/{id}/metadata", s.deleteMetadataHandler).Methods("DELETE")
+
+	// State-specific content routes (MUST be after literal routes like /metadata, /versions, etc.)
+	api.HandleFunc("/content/{type}/{id}/{state}", s.getContentHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id}/{state}", s.createContentHandler).Methods("POST")
+	api.HandleFunc("/content/{type}/{id}/{state}", s.updateContentHandler).Methods("PUT")
+	api.HandleFunc("/content/{type}/{id}/{state}", s.deleteContentHandler).Methods("DELETE")
 
 	// Schema routes (global schemas)
 	// GET    /api/schemas              - List global schemas

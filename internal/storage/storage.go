@@ -105,6 +105,7 @@ type WebhookEvent struct {
 	Tenant      string `json:"tenant"`
 	Type        string `json:"type"`
 	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
 	ContentType string `json:"content-type,omitempty"`
 	Timestamp   string `json:"timestamp"`
 }

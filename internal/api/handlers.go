@@ -407,7 +407,7 @@ func (s *Server) createContentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		log.Debug("Created content: %s (%s, %d bytes)", item.Key, mimeType, item.Size)
-		s.triggerWebhooks(tenant, "create", contentType, id, mimeType)
+		s.triggerWebhooks(tenant, "create", contentType, id, filepath.Base(item.Key), mimeType)
 
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
 			"id":      id,
@@ -473,7 +473,7 @@ func (s *Server) createContentHandler(w http.ResponseWriter, r *http.Request) {
 	log.Debug("Created content: %s (%s, %d bytes)", item.Key, mimeType, item.Size)
 
 	// Trigger webhooks
-	s.triggerWebhooks(tenant, "create", contentType, id, mimeType)
+	s.triggerWebhooks(tenant, "create", contentType, id, filepath.Base(item.Key), mimeType)
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":      id,
@@ -692,7 +692,7 @@ func (s *Server) updateContentHandler(w http.ResponseWriter, r *http.Request) {
 	log.Debug("Updated content: %s (%d bytes)", item.Key, item.Size)
 
 	// Trigger webhooks
-	s.triggerWebhooks(tenant, "update", contentType, id, mimeType)
+	s.triggerWebhooks(tenant, "update", contentType, id, filepath.Base(item.Key), mimeType)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id":      id,
@@ -722,7 +722,7 @@ func (s *Server) deleteContentHandler(w http.ResponseWriter, r *http.Request) {
 	log.Debug("Deleted content: %s/%s/%s.%s (state: %s)", tenant, contentType, id, ext, state)
 
 	// Trigger webhooks
-	s.triggerWebhooks(tenant, "delete", contentType, id, "")
+	s.triggerWebhooks(tenant, "delete", contentType, id, id+"."+ext, "") // no item.Key available for delete
 
 	msg := "Content deleted successfully"
 	if state == storage.StateLive {
@@ -803,7 +803,7 @@ func (s *Server) transitionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Trigger publish webhook
-		s.triggerWebhooks(tenant, "publish", contentType, id, item.ContentType)
+		s.triggerWebhooks(tenant, "publish", contentType, id, filepath.Base(item.Key), item.ContentType)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -1541,7 +1541,7 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 // =============================================================================
 
 // triggerWebhooks fires webhooks asynchronously for a content event
-func (s *Server) triggerWebhooks(tenant, event, contentType, id, mimeType string) {
+func (s *Server) triggerWebhooks(tenant, event, contentType, id, name, mimeType string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -1556,6 +1556,7 @@ func (s *Server) triggerWebhooks(tenant, event, contentType, id, mimeType string
 			Tenant:      tenant,
 			Type:        contentType,
 			ID:          id,
+			Name:        name,
 			ContentType: mimeType,
 			Timestamp:   time.Now().UTC().Format(time.RFC3339),
 		}
