@@ -187,6 +187,106 @@ This allows safe development without affecting production data.
 | `PUT` | `/api/tenant/schemas/{name}` | Create/update tenant schema |
 | `DELETE` | `/api/tenant/schemas/{name}` | Delete tenant schema |
 
+### Bulk Content Fetch
+
+Fetch multiple content items in a single request with parallel S3 fetches:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/content` | Bulk fetch multiple items |
+
+**Request body:**
+```json
+{
+  "items": [
+    {"type": "pages", "id": "home"},
+    {"type": "pages", "id": "about"},
+    {"type": "images", "id": "logo", "content-type": "url"}
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "items": {
+    "pages/home": {
+      "type": "pages",
+      "id": "home",
+      "content-type": "text/html",
+      "content": "<html>...",
+      "version": "abc123",
+      "last_modified": "2025-01-15T..."
+    },
+    "images/logo": {
+      "type": "images",
+      "id": "logo",
+      "content-type": "url",
+      "url": "/content/demo/images/logo"
+    }
+  },
+  "count": 3,
+  "errors": 0
+}
+```
+
+Set `"content-type": "url"` to get a URL instead of content (useful for images/assets).
+
+### Public Content URLs
+
+Direct content access for embedding in HTML (images, CSS, JS, etc.):
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/content/{tenant}/{type}/{id}` | Direct content with correct MIME type |
+
+```html
+<!-- Embed images directly -->
+<img src="https://velocity.ee/content/demo/images/logo.png">
+
+<!-- Link stylesheets -->
+<link rel="stylesheet" href="https://velocity.ee/content/demo/css/main.css">
+```
+
+**Features:**
+- Returns content with correct `Content-Type` header
+- Supports HTTP caching (ETag, Last-Modified, Cache-Control)
+- Public access (no authentication required)
+- Read-only (GET only)
+
+### Webhooks
+
+Configure webhooks to receive notifications when content changes:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/webhooks` | List webhooks for tenant |
+| `GET` | `/api/webhooks/{id}` | Get webhook |
+| `PUT` | `/api/webhooks/{id}` | Create/update webhook |
+| `DELETE` | `/api/webhooks/{id}` | Delete webhook |
+
+**Create webhook:**
+```bash
+curl -X PUT https://velocity.ee/api/webhooks/my-hook \
+  -H "X-Tenant: demo" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/webhook", "events": ["create", "update", "delete", "publish"]}'
+```
+
+**Webhook payload:**
+```json
+{
+  "event": "create",
+  "tenant": "demo",
+  "type": "pages",
+  "id": "home",
+  "content-type": "text/html",
+  "timestamp": "2025-01-15T10:30:00Z"
+}
+```
+
+**Event types:** `create`, `update`, `delete`, `publish`
+
 ### Comments
 
 Comments are only available on draft and pending content:
@@ -265,20 +365,38 @@ Velocity supports HTTP caching to reduce bandwidth and improve performance:
 
 ```bash
 # Build CLI
-go build -o velocity-cli ./cli
+go build -o velocity ./cli
+
+# Or install
+./install.sh
 
 # Show help
-./velocity-cli --help
+velocity --help
 
 # List content
-./velocity-cli content list articles
+velocity content list articles --tenant demo
 
 # Get content
-./velocity-cli content get articles hello-world
+velocity content get articles hello-world --tenant demo
 
-# Create content
-./velocity-cli content create articles my-article -d '{"title": "New Article"}'
+# Create content with JSON
+velocity content create articles my-article -d '{"title": "New Article"}' --tenant demo
+
+# Upload a file
+velocity content create images logo.png --file logo.png --tenant demo
+
+# Update a file
+velocity content update pages home.html --file home.html --tenant demo
 ```
+
+### CLI Options
+
+| Flag | Default | Environment | Description |
+|------|---------|-------------|-------------|
+| `--endpoint` | `http://localhost:8080` | `VELOCITY_ENDPOINT` | API endpoint URL |
+| `--tenant` | `demo` | `VELOCITY_TENANT` | Tenant identifier |
+| `--api-key` | - | `VELOCITY_API_KEY` | API key for authentication |
+| `--output` | `table` | - | Output format (table, json) |
 
 ## Building
 
@@ -339,8 +457,8 @@ Required secrets:
 - [ ] **Tenant Extraction** - Extract tenant from JWT claims
 
 ### Webhooks & Events
-- [ ] **Webhook Configuration** - Register webhook endpoints per event type
-- [ ] **Event Types** - content.created, content.updated, content.deleted, content.published
+- [x] **Webhook Configuration** - Register webhook endpoints per tenant
+- [x] **Event Types** - create, update, delete, publish
 - [ ] **Retry Logic** - Exponential backoff for failed webhook deliveries
 - [ ] **Webhook Signatures** - HMAC signatures for webhook verification
 - [ ] **Event Log** - Queryable log of all events
@@ -355,7 +473,7 @@ Required secrets:
 - [ ] **Server-Side Cache** - In-memory LRU cache to reduce S3 API calls
 - [ ] **Redis Cache** - Distributed caching for multi-instance deployments
 - [ ] **CDN Integration** - Cache invalidation hooks for CDN (CloudFront, Fastly)
-- [ ] **Batch Operations** - Bulk create/update/delete endpoints
+- [x] **Batch Operations** - Bulk fetch endpoint with parallel S3 requests
 
 ### Search & Discovery
 - [ ] **Full-Text Search** - Integration with Elasticsearch or Meilisearch
