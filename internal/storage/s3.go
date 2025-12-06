@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -246,6 +247,8 @@ func (s *S3Storage) PutStream(ctx context.Context, tenant string, contentType st
 
 // pruneVersions deletes old versions beyond maxVersions
 func (s *S3Storage) pruneVersions(ctx context.Context, key string) {
+	log.Info("Pruning versions for %s (keeping max %d)", key, s.maxVersions)
+
 	versions, err := s.s3Client.ListObjectVersions(ctx, &s3.ListObjectVersionsInput{
 		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(key),
@@ -263,10 +266,23 @@ func (s *S3Storage) pruneVersions(ctx context.Context, key string) {
 		}
 	}
 
+	log.Info("Found %d versions for %s", len(objectVersions), key)
+
+	// Sort by LastModified descending (newest first)
+	sort.Slice(objectVersions, func(i, j int) bool {
+		ti := objectVersions[i].LastModified
+		tj := objectVersions[j].LastModified
+		if ti == nil || tj == nil {
+			return false
+		}
+		return ti.After(*tj)
+	})
+
 	// If we have more versions than allowed, delete the oldest ones
 	if len(objectVersions) > s.maxVersions {
-		// Versions are returned newest first, so skip the first maxVersions
+		// Skip the first maxVersions (newest), delete the rest
 		toDelete := objectVersions[s.maxVersions:]
+		log.Info("Deleting %d old versions", len(toDelete))
 		for _, v := range toDelete {
 			_, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 				Bucket:    aws.String(s.bucket),
@@ -276,7 +292,7 @@ func (s *S3Storage) pruneVersions(ctx context.Context, key string) {
 			if err != nil {
 				log.Error("Failed to delete old version %s: %v", aws.ToString(v.VersionId), err)
 			} else {
-				log.Debug("Pruned old version %s of %s", aws.ToString(v.VersionId), key)
+				log.Info("Pruned old version %s of %s", aws.ToString(v.VersionId), key)
 			}
 		}
 	}
