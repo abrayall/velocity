@@ -621,7 +621,7 @@ func (s *Server) directContentHandler(w http.ResponseWriter, r *http.Request) {
 	// Set caching headers
 	w.Header().Set("ETag", stream.ETag)
 	w.Header().Set("Last-Modified", stream.LastModified.UTC().Format(time.RFC1123))
-	w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
+	w.Header().Set("Cache-Control", "public, max-age=60, must-revalidate")
 
 	// Set content headers
 	w.Header().Set("Content-Type", stream.ContentType)
