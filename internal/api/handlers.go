@@ -291,6 +291,37 @@ func (s *Server) createContentHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 	state := getState(r)
 
+	// Check if ID already has an extension
+	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
+		ext := id[idx+1:]
+		id = id[:idx]
+		// Use extension from ID, get mime type from that
+		mimeType := r.Header.Get("Content-Type")
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		contentLength := r.ContentLength
+		body := r.Body
+		defer r.Body.Close()
+
+		item, err := s.storage.PutStream(r.Context(), tenant, contentType, id, ext, body, contentLength, mimeType, state)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+			return
+		}
+
+		log.Debug("Created content: %s (%s, %d bytes)", item.Key, mimeType, item.Size)
+		s.triggerWebhooks(tenant, "create", contentType, id, mimeType)
+
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"id":      id,
+			"state":   string(state),
+			"version": item.VersionID,
+			"message": "Content created successfully",
+		})
+		return
+	}
+
 	var body io.Reader
 	var contentLength int64
 	var mimeType string
@@ -500,7 +531,15 @@ func (s *Server) updateContentHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 	state := getState(r)
 
-	ext := s.getExtensionFromSchema(r.Context(), contentType)
+	// Check if ID already has an extension
+	var ext string
+	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
+		ext = id[idx+1:]
+		id = id[:idx]
+	} else {
+		ext = getExtensionFromMime(r.Header.Get("Content-Type"))
+	}
+
 	contentLength := r.ContentLength
 	mimeType := r.Header.Get("Content-Type")
 	if mimeType == "" {

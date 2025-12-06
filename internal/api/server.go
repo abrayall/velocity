@@ -40,6 +40,10 @@ func NewServer(storageClient *storage.Client, config *ServerConfig) *Server {
 func (s *Server) setupRoutes() {
 	// Direct content URL (outside /api, no tenant header needed)
 	// GET /content/{tenant}/{type}/{id} - Direct content access with correct mime type
+	// NOTE: This route is intentionally outside /api and should remain:
+	//   - Read-only (GET only)
+	//   - Public (no authentication required)
+	//   - Used for embeddable URLs (images, CSS, etc.)
 	s.router.HandleFunc("/content/{tenant}/{type}/{id}", s.directContentHandler).Methods("GET")
 
 	api := s.router.PathPrefix("/api").Subrouter()
