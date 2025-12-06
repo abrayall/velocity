@@ -123,12 +123,16 @@ This allows safe development without affecting production data.
 | `POST` | `/api/content/{type}/{id}/draft` | Create new draft |
 | `POST` | `/api/content/{type}/{id}/pending` | Create new pending |
 | `GET` | `/api/content/{type}/{id}` | Get live content |
+| `GET` | `/api/content/{type}/{id}?attribute=metadata` | Get metadata only (JSON) |
+| `GET` | `/api/content/{type}/{id}?attribute=url` | Get content URL only (JSON) |
 | `GET` | `/api/content/{type}/{id}/draft` | Get draft content |
 | `GET` | `/api/content/{type}/{id}/pending` | Get pending content |
 | `PUT` | `/api/content/{type}/{id}` | Update live content |
 | `PUT` | `/api/content/{type}/{id}/{state}` | Update content in state |
 | `DELETE` | `/api/content/{type}/{id}` | Delete live content |
 | `DELETE` | `/api/content/{type}/{id}/{state}` | Delete content in state |
+
+The `id` can include the file extension (e.g., `hero.png`) or omit it (e.g., `hero`).
 
 ### State Transitions
 
@@ -202,10 +206,17 @@ Fetch multiple content items in a single request:
   "items": [
     {"type": "pages", "id": "home"},
     {"type": "pages", "id": "about"},
-    {"type": "images", "id": "logo", "content-type": "url"}
+    {"type": "images", "id": "logo", "attribute": "url"},
+    {"type": "images", "id": "hero.png", "attribute": "metadata"}
   ]
 }
 ```
+
+**Item fields:**
+- `type` - Content type (required)
+- `id` - Content ID, with or without extension (required)
+- `attribute` - What to return: `"content"` (default), `"metadata"`, or `"url"`
+- `content-type` - MIME type hint for extension resolution (e.g., `"image/png"`)
 
 **Response:**
 ```json
@@ -222,18 +233,21 @@ Fetch multiple content items in a single request:
     "images/logo": {
       "type": "images",
       "id": "logo",
-      "content-type": "url",
+      "attribute": "url",
       "url": "/content/demo/images/logo"
+    },
+    "images/hero.png": {
+      "type": "images",
+      "id": "hero.png",
+      "attribute": "metadata",
+      "content-type": "image/png",
+      "metadata": {"alt": "Hero image", "width": "1920"}
     }
   },
-  "count": 3,
+  "count": 4,
   "errors": 0
 }
 ```
-
-Set `"content-type": "url"` to get a URL instead of content (useful for images/assets).
-
-Set `"content-type": "metadata"` to get only the metadata without fetching content.
 
 ### Metadata
 

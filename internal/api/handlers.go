@@ -70,6 +70,17 @@ func getExtensionFromMime(mimeType string) string {
 	return "bin"
 }
 
+// extractIDAndExt extracts the content ID and extension from a storage key
+func extractIDAndExt(key string, contentType string, state storage.State) (string, string) {
+	// Key format: {root}/tenants/{tenant}/content/{type}/{id}.{ext}
+	// or: {root}/tenants/{tenant}/content/{type}/_draft/{id}.{ext}
+	filename := filepath.Base(key)
+	if idx := strings.LastIndex(filename, "."); idx != -1 {
+		return filename[:idx], filename[idx+1:]
+	}
+	return filename, ""
+}
+
 // getState extracts state from path parameter, defaults to live
 func getState(r *http.Request) storage.State {
 	vars := mux.Vars(r)
@@ -126,21 +137,13 @@ func extractMetadata(r *http.Request) map[string]string {
 func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 
-	// Get extension hint from Accept header
-	extHint := ""
-	if accept := r.Header.Get("Accept"); accept != "" {
-		extHint = getExtensionFromMime(accept)
-		if extHint == "bin" {
-			extHint = ""
-		}
-	}
-
 	// Parse request
 	var req struct {
 		Items []struct {
 			Type        string `json:"type"`
 			ID          string `json:"id"`
-			ContentType string `json:"content-type,omitempty"`
+			Attribute   string `json:"attribute,omitempty"`   // "content" (default), "metadata", or "url"
+			ContentType string `json:"content-type,omitempty"` // MIME type hint (e.g., "image/png")
 		} `json:"items"`
 	}
 
@@ -164,51 +167,54 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 	results := make(chan itemResult, len(req.Items))
 
 	for _, item := range req.Items {
-		go func(contentType, id, requestedType string) {
+		go func(contentType, id, attribute, mimeHint string) {
 			key := contentType + "/" + id
 			res := map[string]interface{}{
 				"type": contentType,
 				"id":   id,
 			}
 
+			// Get extension hint from content-type MIME hint
+			extHint := ""
+			if mimeHint != "" {
+				extHint = getExtensionFromMime(mimeHint)
+				if extHint == "bin" {
+					extHint = ""
+				}
+			}
+
 			// If requesting URL only, just return the URL without fetching content
-			if requestedType == "url" {
-				res["content-type"] = "url"
+			if attribute == "url" {
+				res["attribute"] = "url"
 				res["url"] = fmt.Sprintf("/content/%s/%s/%s", tenant, contentType, id)
 				results <- itemResult{key: key, result: res}
 				return
 			}
 
 			// If requesting metadata only, fetch just the metadata
-			if requestedType == "metadata" {
-				// Check if ID has an extension
-				ext := extHint
-				idPart := id
-				if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
-					ext = id[idx+1:]
-					idPart = id[:idx]
-				}
-				if ext == "" {
-					ext = "json"
-				}
-
-				metadata, err := s.storage.GetMetadata(r.Context(), tenant, contentType, idPart, ext, storage.StateLive)
+			if attribute == "metadata" {
+				// Find the actual content file
+				stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, storage.StateLive)
 				if err != nil {
 					res["error"] = "not_found"
 					res["message"] = fmt.Sprintf("Content '%s' not found", id)
 					results <- itemResult{key: key, result: res}
 					return
 				}
+				stream.Body.Close()
 
-				res["content-type"] = "metadata"
-				if metadata == nil {
-					metadata = make(map[string]string)
+				res["attribute"] = "metadata"
+				res["content-type"] = stream.ContentType
+				if stream.Metadata == nil {
+					res["metadata"] = make(map[string]string)
+				} else {
+					res["metadata"] = stream.Metadata
 				}
-				res["metadata"] = metadata
 				results <- itemResult{key: key, result: res}
 				return
 			}
 
+			// Default: fetch full content
 			stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, storage.StateLive)
 			if err != nil {
 				res["error"] = "not_found"
@@ -254,7 +260,7 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			results <- itemResult{key: key, result: res}
-		}(item.Type, item.ID, item.ContentType)
+		}(item.Type, item.ID, item.Attribute, item.ContentType)
 	}
 
 	// Collect results
@@ -465,6 +471,9 @@ func (s *Server) getContentHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 	state := getState(r)
 
+	// Check for attribute query param: "content" (default), "metadata", or "url"
+	attribute := r.URL.Query().Get("attribute")
+
 	// Get extension hint from Accept header
 	extHint := ""
 	if accept := r.Header.Get("Accept"); accept != "" {
@@ -474,6 +483,39 @@ func (s *Server) getContentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// If requesting URL only, return JSON with the URL
+	if attribute == "url" {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"id":        id,
+			"attribute": "url",
+			"url":       fmt.Sprintf("/content/%s/%s/%s", tenant, contentType, id),
+		})
+		return
+	}
+
+	// If requesting metadata only, return JSON with metadata
+	if attribute == "metadata" {
+		stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, state)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Content '%s' not found", id))
+			return
+		}
+		stream.Body.Close()
+
+		metadata := stream.Metadata
+		if metadata == nil {
+			metadata = make(map[string]string)
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"id":           id,
+			"attribute":    "metadata",
+			"content-type": stream.ContentType,
+			"metadata":     metadata,
+		})
+		return
+	}
+
+	// Default: return full content
 	stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, state)
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") || strings.Contains(err.Error(), "not found") {
@@ -1626,30 +1668,20 @@ func (s *Server) getMetadataHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 	state := getState(r)
 
-	// Check if ID has an extension
-	var ext string
-	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
-		ext = id[idx+1:]
-		id = id[:idx]
-	} else {
-		ext = "json" // default
-	}
-
-	metadata, err := s.storage.GetMetadata(r.Context(), tenant, contentType, id, ext, state)
+	// Find the actual content file
+	stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, "", state)
 	if err != nil {
-		if strings.Contains(err.Error(), "NotFound") || strings.Contains(err.Error(), "not found") {
-			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Content '%s' not found", id))
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Content '%s' not found", id))
+		return
+	}
+	stream.Body.Close()
+
+	if stream.Metadata == nil {
+		writeJSON(w, http.StatusOK, map[string]string{})
 		return
 	}
 
-	if metadata == nil {
-		metadata = make(map[string]string)
-	}
-
-	writeJSON(w, http.StatusOK, metadata)
+	writeJSON(w, http.StatusOK, stream.Metadata)
 }
 
 // setMetadataHandler replaces all metadata on a content item
@@ -1661,22 +1693,24 @@ func (s *Server) setMetadataHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 	state := getState(r)
 
-	// Check if ID has an extension
-	var ext string
-	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
-		ext = id[idx+1:]
-		id = id[:idx]
-	} else {
-		ext = "json" // default
-	}
-
 	var metadata map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&metadata); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
 		return
 	}
 
-	if err := s.storage.SetMetadata(r.Context(), tenant, contentType, id, ext, state, metadata); err != nil {
+	// Find the actual content file
+	stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, "", state)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Content '%s' not found", id))
+		return
+	}
+	stream.Body.Close()
+
+	// Extract id and ext from the found key
+	foundID, ext := extractIDAndExt(stream.Key, contentType, state)
+
+	if err := s.storage.SetMetadata(r.Context(), tenant, contentType, foundID, ext, state, metadata); err != nil {
 		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
 		return
 	}
@@ -1697,28 +1731,30 @@ func (s *Server) updateMetadataHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 	state := getState(r)
 
-	// Check if ID has an extension
-	var ext string
-	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
-		ext = id[idx+1:]
-		id = id[:idx]
-	} else {
-		ext = "json" // default
-	}
-
 	var updates map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
 		return
 	}
 
-	if err := s.storage.UpdateMetadata(r.Context(), tenant, contentType, id, ext, state, updates); err != nil {
+	// Find the actual content file
+	stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, "", state)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Content '%s' not found", id))
+		return
+	}
+	stream.Body.Close()
+
+	// Extract id and ext from the found key
+	foundID, ext := extractIDAndExt(stream.Key, contentType, state)
+
+	if err := s.storage.UpdateMetadata(r.Context(), tenant, contentType, foundID, ext, state, updates); err != nil {
 		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
 		return
 	}
 
 	// Get updated metadata to return
-	metadata, _ := s.storage.GetMetadata(r.Context(), tenant, contentType, id, ext, state)
+	metadata, _ := s.storage.GetMetadata(r.Context(), tenant, contentType, foundID, ext, state)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id":       id,
@@ -1736,15 +1772,6 @@ func (s *Server) deleteMetadataHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 	state := getState(r)
 
-	// Check if ID has an extension
-	var ext string
-	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
-		ext = id[idx+1:]
-		id = id[:idx]
-	} else {
-		ext = "json" // default
-	}
-
 	var req struct {
 		Keys []string `json:"keys"`
 	}
@@ -1758,13 +1785,24 @@ func (s *Server) deleteMetadataHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.storage.DeleteMetadataKeys(r.Context(), tenant, contentType, id, ext, state, req.Keys); err != nil {
+	// Find the actual content file
+	stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, "", state)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Content '%s' not found", id))
+		return
+	}
+	stream.Body.Close()
+
+	// Extract id and ext from the found key
+	foundID, ext := extractIDAndExt(stream.Key, contentType, state)
+
+	if err := s.storage.DeleteMetadataKeys(r.Context(), tenant, contentType, foundID, ext, state, req.Keys); err != nil {
 		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
 		return
 	}
 
 	// Get updated metadata to return
-	metadata, _ := s.storage.GetMetadata(r.Context(), tenant, contentType, id, ext, state)
+	metadata, _ := s.storage.GetMetadata(r.Context(), tenant, contentType, foundID, ext, state)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id":       id,
