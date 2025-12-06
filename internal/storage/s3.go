@@ -120,6 +120,23 @@ type Comment struct {
 	ResolvedAt time.Time `json:"resolved_at,omitempty"`
 }
 
+// Webhook represents a webhook configuration for a tenant
+type Webhook struct {
+	ID     string   `json:"id"`
+	URL    string   `json:"url"`
+	Events []string `json:"events"` // create, update, delete, publish
+}
+
+// WebhookEvent represents an event payload sent to webhooks
+type WebhookEvent struct {
+	Event       string `json:"event"`
+	Tenant      string `json:"tenant"`
+	Type        string `json:"type"`
+	ID          string `json:"id"`
+	ContentType string `json:"content-type,omitempty"`
+	Timestamp   string `json:"timestamp"`
+}
+
 // NewClient creates a new S3/Wasabi storage client
 func NewClient(cfg Config) (*Client, error) {
 	// Custom endpoint resolver for Wasabi
@@ -1181,4 +1198,112 @@ func (c *Client) HasUnresolvedComments(ctx context.Context, tenant string, conte
 	}
 
 	return false, nil
+}
+
+// =============================================================================
+// Webhook Operations
+// =============================================================================
+
+// webhookKey constructs the S3 key for a webhook
+func (c *Client) webhookKey(tenant string, webhookID string) string {
+	return path.Join(c.root, "tenants", tenant, "webhooks", webhookID+".json")
+}
+
+// webhookPrefix returns the prefix for listing webhooks
+func (c *Client) webhookPrefix(tenant string) string {
+	return path.Join(c.root, "tenants", tenant, "webhooks") + "/"
+}
+
+// ListWebhooks lists all webhooks for a tenant
+func (c *Client) ListWebhooks(ctx context.Context, tenant string) ([]*Webhook, error) {
+	prefix := c.webhookPrefix(tenant)
+
+	input := &s3.ListObjectsV2Input{
+		Bucket: aws.String(c.bucket),
+		Prefix: aws.String(prefix),
+	}
+
+	result, err := c.s3Client.ListObjectsV2(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list webhooks: %w", err)
+	}
+
+	var webhooks []*Webhook
+	for _, obj := range result.Contents {
+		key := aws.ToString(obj.Key)
+		// Extract webhook ID from key
+		filename := path.Base(key)
+		if !strings.HasSuffix(filename, ".json") {
+			continue
+		}
+		webhookID := strings.TrimSuffix(filename, ".json")
+
+		webhook, err := c.GetWebhook(ctx, tenant, webhookID)
+		if err != nil {
+			log.Error("Failed to get webhook %s: %v", webhookID, err)
+			continue
+		}
+		webhooks = append(webhooks, webhook)
+	}
+
+	return webhooks, nil
+}
+
+// GetWebhook retrieves a webhook by ID
+func (c *Client) GetWebhook(ctx context.Context, tenant string, webhookID string) (*Webhook, error) {
+	key := c.webhookKey(tenant, webhookID)
+
+	result, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("webhook not found: %w", err)
+	}
+	defer result.Body.Close()
+
+	var webhook Webhook
+	if err := json.NewDecoder(result.Body).Decode(&webhook); err != nil {
+		return nil, fmt.Errorf("failed to decode webhook: %w", err)
+	}
+
+	webhook.ID = webhookID
+	return &webhook, nil
+}
+
+// PutWebhook creates or updates a webhook
+func (c *Client) PutWebhook(ctx context.Context, tenant string, webhook *Webhook) error {
+	key := c.webhookKey(tenant, webhook.ID)
+
+	data, err := json.Marshal(webhook)
+	if err != nil {
+		return fmt.Errorf("failed to marshal webhook: %w", err)
+	}
+
+	_, err = c.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(c.bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String("application/json"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to save webhook: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteWebhook removes a webhook
+func (c *Client) DeleteWebhook(ctx context.Context, tenant string, webhookID string) error {
+	key := c.webhookKey(tenant, webhookID)
+
+	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete webhook: %w", err)
+	}
+
+	return nil
 }

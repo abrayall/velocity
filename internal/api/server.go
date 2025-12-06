@@ -38,6 +38,10 @@ func NewServer(storageClient *storage.Client, config *ServerConfig) *Server {
 
 // setupRoutes configures all API routes
 func (s *Server) setupRoutes() {
+	// Direct content URL (outside /api, no tenant header needed)
+	// GET /content/{tenant}/{type}/{id} - Direct content access with correct mime type
+	s.router.HandleFunc("/content/{tenant}/{type}/{id}", s.directContentHandler).Methods("GET")
+
 	api := s.router.PathPrefix("/api").Subrouter()
 
 	// Add request logging
@@ -65,6 +69,10 @@ func (s *Server) setupRoutes() {
 	// PUT    /api/content/{type}/{id}/{state}    - Update item in state
 	// DELETE /api/content/{type}/{id}            - Delete live item
 	// DELETE /api/content/{type}/{id}/{state}    - Delete item in state
+
+	// Bulk get
+	// POST   /api/content                        - Bulk get multiple items
+	api.HandleFunc("/content", s.bulkGetHandler).Methods("POST")
 
 	api.HandleFunc("/content/{type}", s.listContentHandler).Methods("GET")
 	api.HandleFunc("/content/{type}/{id}", s.getOrListContentHandler).Methods("GET")
@@ -134,6 +142,17 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/content/{type}/{id}/{state}/comments/{comment_id}", s.getCommentHandler).Methods("GET")
 	api.HandleFunc("/content/{type}/{id}/{state}/comments/{comment_id}", s.updateCommentHandler).Methods("PUT")
 	api.HandleFunc("/content/{type}/{id}/{state}/comments/{comment_id}", s.deleteCommentHandler).Methods("DELETE")
+
+	// Webhook routes
+	// GET    /api/webhooks              - List webhooks for tenant
+	// GET    /api/webhooks/{id}         - Get webhook
+	// PUT    /api/webhooks/{id}         - Create/update webhook
+	// DELETE /api/webhooks/{id}         - Delete webhook
+
+	api.HandleFunc("/webhooks", s.listWebhooksHandler).Methods("GET")
+	api.HandleFunc("/webhooks/{id}", s.getWebhookHandler).Methods("GET")
+	api.HandleFunc("/webhooks/{id}", s.putWebhookHandler).Methods("PUT")
+	api.HandleFunc("/webhooks/{id}", s.deleteWebhookHandler).Methods("DELETE")
 }
 
 // Handler returns the HTTP handler with CORS support

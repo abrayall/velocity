@@ -94,3 +94,4 @@ curl http://localhost:8080/api/health
 - `S3_SECRET_ACCESS_KEY` - Secret key
 - `S3_ROOT` - Root path prefix
 - `LOG_LEVEL` - trace, debug, info, error
+- 3....please regerate the contract again with this info

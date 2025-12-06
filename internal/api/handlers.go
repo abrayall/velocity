@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -102,6 +105,125 @@ func (s *Server) listTypesHandler(w http.ResponseWriter, r *http.Request) {
 // =============================================================================
 // Content Handlers
 // =============================================================================
+
+// bulkGetHandler fetches multiple content items in parallel
+func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := s.getTenant(r)
+
+	// Get extension hint from Accept header
+	extHint := ""
+	if accept := r.Header.Get("Accept"); accept != "" {
+		extHint = getExtensionFromMime(accept)
+		if extHint == "bin" {
+			extHint = ""
+		}
+	}
+
+	// Parse request
+	var req struct {
+		Items []struct {
+			Type        string `json:"type"`
+			ID          string `json:"id"`
+			ContentType string `json:"content-type,omitempty"`
+		} `json:"items"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+
+	if len(req.Items) == 0 {
+		writeError(w, http.StatusBadRequest, "missing_items", "No items requested")
+		return
+	}
+
+	// Result structure
+	type itemResult struct {
+		key    string
+		result map[string]interface{}
+	}
+
+	// Fetch all items in parallel
+	results := make(chan itemResult, len(req.Items))
+
+	for _, item := range req.Items {
+		go func(contentType, id, requestedType string) {
+			key := contentType + "/" + id
+			res := map[string]interface{}{
+				"type": contentType,
+				"id":   id,
+			}
+
+			// If requesting URL only, just return the URL without fetching content
+			if requestedType == "url" {
+				res["content-type"] = "url"
+				res["url"] = fmt.Sprintf("/content/%s/%s/%s", tenant, contentType, id)
+				results <- itemResult{key: key, result: res}
+				return
+			}
+
+			stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, storage.StateLive)
+			if err != nil {
+				res["error"] = "not_found"
+				res["message"] = fmt.Sprintf("Content '%s' not found", id)
+				results <- itemResult{key: key, result: res}
+				return
+			}
+			defer stream.Body.Close()
+
+			// Read content
+			content, err := io.ReadAll(stream.Body)
+			if err != nil {
+				res["error"] = "read_error"
+				res["message"] = "Failed to read content"
+				results <- itemResult{key: key, result: res}
+				return
+			}
+
+			res["content-type"] = stream.ContentType
+			res["version"] = stream.VersionID
+			res["last_modified"] = stream.LastModified.UTC().Format(time.RFC3339)
+
+			// Handle content based on type
+			if strings.HasPrefix(stream.ContentType, "application/json") {
+				// Parse JSON content
+				var jsonContent interface{}
+				if err := json.Unmarshal(content, &jsonContent); err == nil {
+					res["content"] = jsonContent
+				} else {
+					res["content"] = string(content)
+				}
+			} else if strings.HasPrefix(stream.ContentType, "text/") {
+				// Text content as string
+				res["content"] = string(content)
+			} else {
+				// Binary content as base64
+				res["content"] = "base64:" + base64.StdEncoding.EncodeToString(content)
+			}
+
+			results <- itemResult{key: key, result: res}
+		}(item.Type, item.ID, item.ContentType)
+	}
+
+	// Collect results
+	items := make(map[string]interface{})
+	errorCount := 0
+
+	for i := 0; i < len(req.Items); i++ {
+		result := <-results
+		items[result.key] = result.result
+		if _, hasError := result.result["error"]; hasError {
+			errorCount++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"items":  items,
+		"count":  len(req.Items),
+		"errors": errorCount,
+	})
+}
 
 // listContentHandler lists all content of a type for a tenant
 func (s *Server) listContentHandler(w http.ResponseWriter, r *http.Request) {
@@ -223,6 +345,9 @@ func (s *Server) createContentHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Debug("Created content: %s (%s, %d bytes)", item.Key, mimeType, item.Size)
 
+	// Trigger webhooks
+	s.triggerWebhooks(tenant, "create", contentType, id, mimeType)
+
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":      id,
 		"state":   string(state),
@@ -301,6 +426,51 @@ func (s *Server) getContentHandler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, stream.Body)
 }
 
+// directContentHandler serves content directly via /content/{tenant}/{type}/{id}
+func (s *Server) directContentHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	tenant := vars["tenant"]
+	contentType := vars["type"]
+	id := vars["id"]
+
+	// Get extension hint from Accept header
+	extHint := ""
+	if accept := r.Header.Get("Accept"); accept != "" {
+		extHint = getExtensionFromMime(accept)
+		if extHint == "bin" {
+			extHint = ""
+		}
+	}
+
+	stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, storage.StateLive)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Content '%s' not found", id))
+		return
+	}
+	defer stream.Body.Close()
+
+	// Check conditional request headers for caching
+	if checkNotModified(r, stream.ETag, stream.LastModified) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	// Set caching headers
+	w.Header().Set("ETag", stream.ETag)
+	w.Header().Set("Last-Modified", stream.LastModified.UTC().Format(time.RFC1123))
+	w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
+
+	// Set content headers
+	w.Header().Set("Content-Type", stream.ContentType)
+	if stream.Size > 0 {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", stream.Size))
+	}
+
+	// Stream content directly to response
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, stream.Body)
+}
+
 // checkNotModified checks If-None-Match and If-Modified-Since headers
 func checkNotModified(r *http.Request, etag string, lastModified time.Time) bool {
 	// Check If-None-Match (ETag)
@@ -347,6 +517,9 @@ func (s *Server) updateContentHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Debug("Updated content: %s (%d bytes)", item.Key, item.Size)
 
+	// Trigger webhooks
+	s.triggerWebhooks(tenant, "update", contentType, id, mimeType)
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id":      id,
 		"state":   string(state),
@@ -373,6 +546,9 @@ func (s *Server) deleteContentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Debug("Deleted content: %s/%s/%s.%s (state: %s)", tenant, contentType, id, ext, state)
+
+	// Trigger webhooks
+	s.triggerWebhooks(tenant, "delete", contentType, id, "")
 
 	msg := "Content deleted successfully"
 	if state == storage.StateLive {
@@ -451,6 +627,9 @@ func (s *Server) transitionHandler(w http.ResponseWriter, r *http.Request) {
 			// Log but don't fail the transition
 			log.Error("Failed to create history record: %v", err)
 		}
+
+		// Trigger publish webhook
+		s.triggerWebhooks(tenant, "publish", contentType, id, item.ContentType)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -1180,5 +1359,160 @@ func (s *Server) uploadHandler(w http.ResponseWriter, r *http.Request) {
 		"mime_type":  mimeType,
 		"size":       len(content),
 		"message":    "File uploaded successfully",
+	})
+}
+
+// =============================================================================
+// Webhook Trigger
+// =============================================================================
+
+// triggerWebhooks fires webhooks asynchronously for a content event
+func (s *Server) triggerWebhooks(tenant, event, contentType, id, mimeType string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		webhooks, err := s.storage.ListWebhooks(ctx, tenant)
+		if err != nil || len(webhooks) == 0 {
+			return
+		}
+
+		payload := storage.WebhookEvent{
+			Event:       event,
+			Tenant:      tenant,
+			Type:        contentType,
+			ID:          id,
+			ContentType: mimeType,
+			Timestamp:   time.Now().UTC().Format(time.RFC3339),
+		}
+
+		jsonPayload, err := json.Marshal(payload)
+		if err != nil {
+			log.Error("Failed to marshal webhook payload: %v", err)
+			return
+		}
+
+		client := &http.Client{Timeout: 10 * time.Second}
+
+		for _, webhook := range webhooks {
+			// Check if webhook is subscribed to this event
+			subscribed := false
+			for _, e := range webhook.Events {
+				if e == event {
+					subscribed = true
+					break
+				}
+			}
+			if !subscribed {
+				continue
+			}
+
+			// Fire webhook
+			go func(url string) {
+				resp, err := client.Post(url, "application/json", bytes.NewReader(jsonPayload))
+				if err != nil {
+					log.Debug("Webhook failed for %s: %v", url, err)
+					return
+				}
+				defer resp.Body.Close()
+				log.Debug("Webhook sent to %s: %d", url, resp.StatusCode)
+			}(webhook.URL)
+		}
+	}()
+}
+
+// =============================================================================
+// Webhook Handlers
+// =============================================================================
+
+// listWebhooksHandler lists all webhooks for a tenant
+func (s *Server) listWebhooksHandler(w http.ResponseWriter, r *http.Request) {
+	tenant := s.getTenant(r)
+
+	webhooks, err := s.storage.ListWebhooks(r.Context(), tenant)
+	if err != nil || webhooks == nil {
+		webhooks = []*storage.Webhook{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"webhooks": webhooks,
+		"count":    len(webhooks),
+	})
+}
+
+// getWebhookHandler gets a webhook by ID
+func (s *Server) getWebhookHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	webhookID := vars["id"]
+	tenant := s.getTenant(r)
+
+	webhook, err := s.storage.GetWebhook(r.Context(), tenant, webhookID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Webhook '%s' not found", webhookID))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, webhook)
+}
+
+// putWebhookHandler creates or updates a webhook
+func (s *Server) putWebhookHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	webhookID := vars["id"]
+	tenant := s.getTenant(r)
+
+	var req struct {
+		URL    string   `json:"url"`
+		Events []string `json:"events"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+
+	if req.URL == "" {
+		writeError(w, http.StatusBadRequest, "missing_url", "Webhook URL is required")
+		return
+	}
+
+	webhook := &storage.Webhook{
+		ID:     webhookID,
+		URL:    req.URL,
+		Events: req.Events,
+	}
+
+	// Default to all events if none specified
+	if len(webhook.Events) == 0 {
+		webhook.Events = []string{"create", "update", "delete", "publish"}
+	}
+
+	if err := s.storage.PutWebhook(r.Context(), tenant, webhook); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id":      webhookID,
+		"url":     req.URL,
+		"events":  webhook.Events,
+		"message": "Webhook saved successfully",
+	})
+}
+
+// deleteWebhookHandler deletes a webhook
+func (s *Server) deleteWebhookHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	webhookID := vars["id"]
+	tenant := s.getTenant(r)
+
+	if err := s.storage.DeleteWebhook(r.Context(), tenant, webhookID); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id":      webhookID,
+		"message": "Webhook deleted successfully",
 	})
 }
