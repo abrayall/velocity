@@ -27,14 +27,16 @@ type S3Config struct {
 	AccessKeyID     string
 	SecretAccessKey string
 	Root            string // Root path prefix (e.g., "development" or "production")
+	MaxVersions     int    // Max versions to keep (0 or negative means unlimited, default 10)
 }
 
 // S3Storage provides S3-compatible storage operations.
 // Implements the Storage interface.
 type S3Storage struct {
-	s3Client *s3.Client
-	bucket   string
-	root     string // Root path prefix
+	s3Client    *s3.Client
+	bucket      string
+	root        string // Root path prefix
+	maxVersions int    // Max versions to keep (0 or negative means unlimited)
 }
 
 // Ensure S3Storage implements Storage interface
@@ -74,10 +76,17 @@ func NewS3Storage(cfg S3Config) (*S3Storage, error) {
 	// Clean up root path (remove leading/trailing slashes)
 	root := strings.Trim(cfg.Root, "/")
 
+	// Default to 10 versions if not specified
+	maxVersions := cfg.MaxVersions
+	if maxVersions == 0 {
+		maxVersions = 10
+	}
+
 	return &S3Storage{
-		s3Client: s3Client,
-		bucket:   cfg.Bucket,
-		root:     root,
+		s3Client:    s3Client,
+		bucket:      cfg.Bucket,
+		root:        root,
+		maxVersions: maxVersions,
 	}, nil
 }
 
@@ -221,6 +230,11 @@ func (s *S3Storage) PutStream(ctx context.Context, tenant string, contentType st
 		versionID = *result.VersionId
 	}
 
+	// Prune old versions if this is live content
+	if state == StateLive && s.maxVersions > 0 {
+		go s.pruneVersions(context.Background(), key)
+	}
+
 	return &ContentItem{
 		Key:         key,
 		ContentType: mimeType,
@@ -228,6 +242,44 @@ func (s *S3Storage) PutStream(ctx context.Context, tenant string, contentType st
 		Metadata:    metadata,
 		Size:        contentLength,
 	}, nil
+}
+
+// pruneVersions deletes old versions beyond maxVersions
+func (s *S3Storage) pruneVersions(ctx context.Context, key string) {
+	versions, err := s.s3Client.ListObjectVersions(ctx, &s3.ListObjectVersionsInput{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(key),
+	})
+	if err != nil {
+		log.Error("Failed to list versions for pruning: %v", err)
+		return
+	}
+
+	// Filter to only versions of this exact key (not prefix matches)
+	var objectVersions []types.ObjectVersion
+	for _, v := range versions.Versions {
+		if aws.ToString(v.Key) == key {
+			objectVersions = append(objectVersions, v)
+		}
+	}
+
+	// If we have more versions than allowed, delete the oldest ones
+	if len(objectVersions) > s.maxVersions {
+		// Versions are returned newest first, so skip the first maxVersions
+		toDelete := objectVersions[s.maxVersions:]
+		for _, v := range toDelete {
+			_, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+				Bucket:    aws.String(s.bucket),
+				Key:       aws.String(key),
+				VersionId: v.VersionId,
+			})
+			if err != nil {
+				log.Error("Failed to delete old version %s: %v", aws.ToString(v.VersionId), err)
+			} else {
+				log.Debug("Pruned old version %s of %s", aws.ToString(v.VersionId), key)
+			}
+		}
+	}
 }
 
 // Get retrieves content from S3/Wasabi with a specific state (defaults to live)

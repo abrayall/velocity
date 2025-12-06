@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +30,7 @@ func main() {
 	s3AccessKeyID := flag.String("s3-access-key-id", getEnv("S3_ACCESS_KEY_ID", ""), "S3 access key ID")
 	s3SecretAccessKey := flag.String("s3-secret-access-key", getEnv("S3_SECRET_ACCESS_KEY", ""), "S3 secret access key")
 	s3Root := flag.String("s3-root", getEnv("S3_ROOT", ""), "S3 root path (default: /{environment})")
+	maxVersions := flag.String("max-versions", getEnv("MAX_VERSIONS", "10"), "Max versions to keep per content item (use 'all' for unlimited)")
 	logLevel := flag.String("logging", getEnv("LOG_LEVEL", "info"), "Log level (debug, info, error)")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 
@@ -75,6 +78,14 @@ func main() {
 	ui.PrintKeyValue("S3 Root", config.S3Root)
 	fmt.Println()
 
+	// Parse max versions (negative means unlimited)
+	maxVer := 10
+	if strings.ToLower(*maxVersions) == "all" {
+		maxVer = -1
+	} else if v, err := strconv.Atoi(*maxVersions); err == nil {
+		maxVer = v
+	}
+
 	// Create S3/Wasabi storage client
 	storageClient, err := storage.NewS3Storage(storage.S3Config{
 		Endpoint:        config.S3Endpoint,
@@ -83,6 +94,7 @@ func main() {
 		AccessKeyID:     config.S3AccessKeyID,
 		SecretAccessKey: config.S3SecretAccessKey,
 		Root:            config.S3Root,
+		MaxVersions:     maxVer,
 	})
 	if err != nil {
 		log.Fatal("Failed to create storage client: %v", err)
