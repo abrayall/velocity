@@ -549,7 +549,7 @@ Required secrets:
 - [ ] **Server-Side Cache** - In-memory LRU cache to reduce storage API calls
 - [ ] **Redis Cache** - Distributed caching for multi-instance deployments
 - [ ] **CDN Integration** - Cache invalidation hooks for CDN (CloudFront, Fastly)
-- [ ] **Cloudflare Cache Purge** - Purge Cloudflare cache via API on content update
+- [ ] **Cloudflare Cache Purge** - Purge Cloudflare cache via API on content update (or set `disable_edge_cache: true` in DigitalOcean App Platform spec)
 - [x] **Batch Operations** - Bulk fetch endpoint with parallel requests
 
 ### Search & Discovery
