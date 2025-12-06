@@ -267,36 +267,21 @@ func (s *S3Storage) FindContentStream(ctx context.Context, tenant string, conten
 		return s.getStreamByKey(ctx, key, "")
 	}
 
-	// Build list of extensions to try
-	var extsToTry []string
-
-	// Add hint first if provided
+	// If hint provided, try it first
 	if extHint != "" {
-		extsToTry = append(extsToTry, extHint)
-	}
-
-	// Add common extensions (skip if already in hint)
-	for _, ext := range []string{"html", "json"} {
-		if ext != extHint {
-			extsToTry = append(extsToTry, ext)
-		}
-	}
-
-	// Try each extension
-	for _, ext := range extsToTry {
-		key := s.contentKey(tenant, contentType, id, ext, state)
+		key := s.contentKey(tenant, contentType, id, extHint, state)
 		stream, err := s.getStreamByKey(ctx, key, "")
 		if err == nil {
 			return stream, nil
 		}
 	}
 
-	// Fall back: list prefix and find first match
+	// List prefix to find actual file
 	prefix := s.contentPrefix(tenant, contentType, state) + id + "."
 	input := &s3.ListObjectsV2Input{
 		Bucket:  aws.String(s.bucket),
 		Prefix:  aws.String(prefix),
-		MaxKeys: aws.Int32(1),
+		MaxKeys: aws.Int32(10),
 	}
 
 	result, err := s.s3Client.ListObjectsV2(ctx, input)
@@ -305,8 +290,19 @@ func (s *S3Storage) FindContentStream(ctx context.Context, tenant string, conten
 	}
 
 	if len(result.Contents) > 0 {
-		key := aws.ToString(result.Contents[0].Key)
-		return s.getStreamByKey(ctx, key, "")
+		// If multiple matches, prefer non-json (json might be legacy metadata)
+		var bestKey string
+		for _, obj := range result.Contents {
+			key := aws.ToString(obj.Key)
+			if bestKey == "" {
+				bestKey = key
+			}
+			if !strings.HasSuffix(key, ".json") {
+				bestKey = key
+				break
+			}
+		}
+		return s.getStreamByKey(ctx, bestKey, "")
 	}
 
 	return nil, fmt.Errorf("content '%s' not found", id)

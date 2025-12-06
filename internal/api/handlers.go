@@ -140,10 +140,11 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 	// Parse request
 	var req struct {
 		Items []struct {
-			Type        string `json:"type"`
-			ID          string `json:"id"`
-			Attribute   string `json:"attribute,omitempty"`   // "content" (default), "metadata", or "url"
-			ContentType string `json:"content-type,omitempty"` // MIME type hint (e.g., "image/png")
+			Type        string   `json:"type"`
+			ID          string   `json:"id"`
+			Attribute   string   `json:"attribute,omitempty"`    // single: "content", "metadata", or "url"
+			Attributes  []string `json:"attributes,omitempty"`   // multiple: ["content", "metadata", "url"]
+			ContentType string   `json:"content-type,omitempty"` // MIME type hint (e.g., "image/png")
 		} `json:"items"`
 	}
 
@@ -157,22 +158,50 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalize items: expand attributes into individual attribute requests
+	type normalizedItem struct {
+		Type      string
+		ID        string
+		Attribute string
+		MimeHint  string
+	}
+	var normalized []normalizedItem
+
+	for _, item := range req.Items {
+		// Build list of attributes to fetch
+		var attrs []string
+		if len(item.Attributes) > 0 {
+			attrs = item.Attributes
+		} else if item.Attribute != "" {
+			attrs = []string{item.Attribute}
+		} else {
+			attrs = []string{"content"} // default
+		}
+
+		for _, attr := range attrs {
+			normalized = append(normalized, normalizedItem{
+				Type:      item.Type,
+				ID:        item.ID,
+				Attribute: attr,
+				MimeHint:  item.ContentType,
+			})
+		}
+	}
+
 	// Result structure
 	type itemResult struct {
 		key    string
-		result map[string]interface{}
+		data   map[string]interface{}
+		hasErr bool
 	}
 
 	// Fetch all items in parallel
-	results := make(chan itemResult, len(req.Items))
+	results := make(chan itemResult, len(normalized))
 
-	for _, item := range req.Items {
+	for _, item := range normalized {
 		go func(contentType, id, attribute, mimeHint string) {
 			key := contentType + "/" + id
-			res := map[string]interface{}{
-				"type": contentType,
-				"id":   id,
-			}
+			data := make(map[string]interface{})
 
 			// Get extension hint from content-type MIME hint
 			extHint := ""
@@ -183,43 +212,40 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// If requesting URL only, just return the URL without fetching content
+			// Handle URL attribute - no storage call needed
 			if attribute == "url" {
-				res["attribute"] = "url"
-				res["url"] = fmt.Sprintf("/content/%s/%s/%s", tenant, contentType, id)
-				results <- itemResult{key: key, result: res}
+				data["url"] = fmt.Sprintf("/content/%s/%s/%s", tenant, contentType, id)
+				results <- itemResult{key: key, data: data, hasErr: false}
 				return
 			}
 
-			// If requesting metadata only, fetch just the metadata
+			// Handle metadata attribute
 			if attribute == "metadata" {
-				// Find the actual content file
 				stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, storage.StateLive)
 				if err != nil {
-					res["error"] = "not_found"
-					res["message"] = fmt.Sprintf("Content '%s' not found", id)
-					results <- itemResult{key: key, result: res}
+					data["error"] = "not_found"
+					data["message"] = fmt.Sprintf("Content '%s' not found", id)
+					results <- itemResult{key: key, data: data, hasErr: true}
 					return
 				}
 				stream.Body.Close()
 
-				res["attribute"] = "metadata"
-				res["content-type"] = stream.ContentType
+				data["content-type"] = stream.ContentType
 				if stream.Metadata == nil {
-					res["metadata"] = make(map[string]string)
+					data["metadata"] = make(map[string]string)
 				} else {
-					res["metadata"] = stream.Metadata
+					data["metadata"] = stream.Metadata
 				}
-				results <- itemResult{key: key, result: res}
+				results <- itemResult{key: key, data: data, hasErr: false}
 				return
 			}
 
 			// Default: fetch full content
 			stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, storage.StateLive)
 			if err != nil {
-				res["error"] = "not_found"
-				res["message"] = fmt.Sprintf("Content '%s' not found", id)
-				results <- itemResult{key: key, result: res}
+				data["error"] = "not_found"
+				data["message"] = fmt.Sprintf("Content '%s' not found", id)
+				results <- itemResult{key: key, data: data, hasErr: true}
 				return
 			}
 			defer stream.Body.Close()
@@ -227,57 +253,69 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 			// Read content
 			content, err := io.ReadAll(stream.Body)
 			if err != nil {
-				res["error"] = "read_error"
-				res["message"] = "Failed to read content"
-				results <- itemResult{key: key, result: res}
+				data["error"] = "read_error"
+				data["message"] = "Failed to read content"
+				results <- itemResult{key: key, data: data, hasErr: true}
 				return
 			}
 
-			res["content-type"] = stream.ContentType
-			res["version"] = stream.VersionID
-			res["last_modified"] = stream.LastModified.UTC().Format(time.RFC3339)
+			data["content-type"] = stream.ContentType
+			data["version"] = stream.VersionID
+			data["last_modified"] = stream.LastModified.UTC().Format(time.RFC3339)
 
 			// Include metadata if available
 			if stream.Metadata != nil && len(stream.Metadata) > 0 {
-				res["metadata"] = stream.Metadata
+				data["metadata"] = stream.Metadata
 			}
 
 			// Handle content based on type
 			if strings.HasPrefix(stream.ContentType, "application/json") {
-				// Parse JSON content
 				var jsonContent interface{}
 				if err := json.Unmarshal(content, &jsonContent); err == nil {
-					res["content"] = jsonContent
+					data["content"] = jsonContent
 				} else {
-					res["content"] = string(content)
+					data["content"] = string(content)
 				}
 			} else if strings.HasPrefix(stream.ContentType, "text/") {
-				// Text content as string
-				res["content"] = string(content)
+				data["content"] = string(content)
 			} else {
-				// Binary content as base64
-				res["content"] = "base64:" + base64.StdEncoding.EncodeToString(content)
+				data["content"] = "base64:" + base64.StdEncoding.EncodeToString(content)
 			}
 
-			results <- itemResult{key: key, result: res}
-		}(item.Type, item.ID, item.Attribute, item.ContentType)
+			results <- itemResult{key: key, data: data, hasErr: false}
+		}(item.Type, item.ID, item.Attribute, item.MimeHint)
 	}
 
-	// Collect results
-	items := make(map[string]interface{})
+	// Collect and merge results
+	items := make(map[string]map[string]interface{})
 	errorCount := 0
 
-	for i := 0; i < len(req.Items); i++ {
+	for i := 0; i < len(normalized); i++ {
 		result := <-results
-		items[result.key] = result.result
-		if _, hasError := result.result["error"]; hasError {
+
+		// Initialize or get existing item
+		if items[result.key] == nil {
+			// Extract type and id from key
+			parts := strings.SplitN(result.key, "/", 2)
+			items[result.key] = map[string]interface{}{
+				"type": parts[0],
+				"id":   parts[1],
+			}
+		}
+
+		// Merge data into item
+		for k, v := range result.data {
+			items[result.key][k] = v
+		}
+
+		if result.hasErr {
 			errorCount++
 		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"items":  items,
-		"count":  len(req.Items),
+		"count":  len(items),
 		"errors": errorCount,
 	})
 }
