@@ -158,33 +158,44 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Normalize items: expand attributes into individual attribute requests
-	type normalizedItem struct {
-		Type      string
-		ID        string
-		Attribute string
-		MimeHint  string
+	// Deduplicate and collect attributes per type/id
+	type itemRequest struct {
+		Type       string
+		ID         string
+		MimeHint   string
+		Attributes map[string]bool // set of requested attributes
 	}
-	var normalized []normalizedItem
+	itemMap := make(map[string]*itemRequest)
 
 	for _, item := range req.Items {
-		// Build list of attributes to fetch
-		var attrs []string
-		if len(item.Attributes) > 0 {
-			attrs = item.Attributes
-		} else if item.Attribute != "" {
-			attrs = []string{item.Attribute}
-		} else {
-			attrs = []string{"content"} // default
+		key := item.Type + "/" + item.ID
+
+		// Get or create item request
+		ir, exists := itemMap[key]
+		if !exists {
+			ir = &itemRequest{
+				Type:       item.Type,
+				ID:         item.ID,
+				MimeHint:   item.ContentType,
+				Attributes: make(map[string]bool),
+			}
+			itemMap[key] = ir
 		}
 
-		for _, attr := range attrs {
-			normalized = append(normalized, normalizedItem{
-				Type:      item.Type,
-				ID:        item.ID,
-				Attribute: attr,
-				MimeHint:  item.ContentType,
-			})
+		// Update mime hint if provided
+		if item.ContentType != "" {
+			ir.MimeHint = item.ContentType
+		}
+
+		// Collect attributes
+		if len(item.Attributes) > 0 {
+			for _, attr := range item.Attributes {
+				ir.Attributes[attr] = true
+			}
+		} else if item.Attribute != "" {
+			ir.Attributes[item.Attribute] = true
+		} else {
+			ir.Attributes["content"] = true // default
 		}
 	}
 
@@ -195,119 +206,106 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 		hasErr bool
 	}
 
-	// Fetch all items in parallel
-	results := make(chan itemResult, len(normalized))
+	// Fetch all items in parallel (one goroutine per unique type/id)
+	results := make(chan itemResult, len(itemMap))
 
-	for _, item := range normalized {
-		go func(contentType, id, attribute, mimeHint string) {
-			key := contentType + "/" + id
-			data := make(map[string]interface{})
+	for key, ir := range itemMap {
+		go func(key string, ir *itemRequest) {
+			data := map[string]interface{}{
+				"type": ir.Type,
+				"id":   ir.ID,
+			}
 
 			// Get extension hint from content-type MIME hint
 			extHint := ""
-			if mimeHint != "" {
-				extHint = getExtensionFromMime(mimeHint)
+			if ir.MimeHint != "" {
+				extHint = getExtensionFromMime(ir.MimeHint)
 				if extHint == "bin" {
 					extHint = ""
 				}
 			}
 
-			// Handle URL attribute - no storage call needed
-			if attribute == "url" {
-				data["url"] = fmt.Sprintf("/content/%s/%s/%s", tenant, contentType, id)
+			// Handle URL - no storage call needed
+			if ir.Attributes["url"] {
+				data["url"] = fmt.Sprintf("/content/%s/%s/%s", tenant, ir.Type, ir.ID)
+			}
+
+			// If only URL requested, we're done
+			if len(ir.Attributes) == 1 && ir.Attributes["url"] {
 				results <- itemResult{key: key, data: data, hasErr: false}
 				return
 			}
 
-			// Handle metadata attribute
-			if attribute == "metadata" {
-				stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, storage.StateLive)
-				if err != nil {
-					data["error"] = "not_found"
-					data["message"] = fmt.Sprintf("Content '%s' not found", id)
-					results <- itemResult{key: key, data: data, hasErr: true}
-					return
-				}
-				stream.Body.Close()
+			// Need to fetch from storage for metadata or content
+			needContent := ir.Attributes["content"]
 
-				data["content-type"] = stream.ContentType
+			stream, err := s.storage.FindContentStream(r.Context(), tenant, ir.Type, ir.ID, extHint, storage.StateLive)
+			if err != nil {
+				data["error"] = "not_found"
+				data["message"] = fmt.Sprintf("Content '%s' not found", ir.ID)
+				results <- itemResult{key: key, data: data, hasErr: true}
+				return
+			}
+
+			// Set content-type from stream
+			data["content-type"] = stream.ContentType
+
+			// Handle metadata
+			if ir.Attributes["metadata"] {
 				if stream.Metadata == nil {
 					data["metadata"] = make(map[string]string)
 				} else {
 					data["metadata"] = stream.Metadata
 				}
-				results <- itemResult{key: key, data: data, hasErr: false}
-				return
 			}
 
-			// Default: fetch full content
-			stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, storage.StateLive)
-			if err != nil {
-				data["error"] = "not_found"
-				data["message"] = fmt.Sprintf("Content '%s' not found", id)
-				results <- itemResult{key: key, data: data, hasErr: true}
-				return
-			}
-			defer stream.Body.Close()
-
-			// Read content
-			content, err := io.ReadAll(stream.Body)
-			if err != nil {
-				data["error"] = "read_error"
-				data["message"] = "Failed to read content"
-				results <- itemResult{key: key, data: data, hasErr: true}
-				return
-			}
-
-			data["content-type"] = stream.ContentType
-			data["version"] = stream.VersionID
-			data["last_modified"] = stream.LastModified.UTC().Format(time.RFC3339)
-
-			// Include metadata if available
-			if stream.Metadata != nil && len(stream.Metadata) > 0 {
-				data["metadata"] = stream.Metadata
-			}
-
-			// Handle content based on type
-			if strings.HasPrefix(stream.ContentType, "application/json") {
-				var jsonContent interface{}
-				if err := json.Unmarshal(content, &jsonContent); err == nil {
-					data["content"] = jsonContent
-				} else {
-					data["content"] = string(content)
+			// Handle content
+			if needContent {
+				content, err := io.ReadAll(stream.Body)
+				stream.Body.Close()
+				if err != nil {
+					data["error"] = "read_error"
+					data["message"] = "Failed to read content"
+					results <- itemResult{key: key, data: data, hasErr: true}
+					return
 				}
-			} else if strings.HasPrefix(stream.ContentType, "text/") {
-				data["content"] = string(content)
+
+				data["version"] = stream.VersionID
+				data["last_modified"] = stream.LastModified.UTC().Format(time.RFC3339)
+
+				// Include metadata with content if available (even if not explicitly requested)
+				if stream.Metadata != nil && len(stream.Metadata) > 0 {
+					data["metadata"] = stream.Metadata
+				}
+
+				// Handle content based on type
+				if strings.HasPrefix(stream.ContentType, "application/json") {
+					var jsonContent interface{}
+					if err := json.Unmarshal(content, &jsonContent); err == nil {
+						data["content"] = jsonContent
+					} else {
+						data["content"] = string(content)
+					}
+				} else if strings.HasPrefix(stream.ContentType, "text/") {
+					data["content"] = string(content)
+				} else {
+					data["content"] = "base64:" + base64.StdEncoding.EncodeToString(content)
+				}
 			} else {
-				data["content"] = "base64:" + base64.StdEncoding.EncodeToString(content)
+				stream.Body.Close()
 			}
 
 			results <- itemResult{key: key, data: data, hasErr: false}
-		}(item.Type, item.ID, item.Attribute, item.MimeHint)
+		}(key, ir)
 	}
 
-	// Collect and merge results
+	// Collect results
 	items := make(map[string]map[string]interface{})
 	errorCount := 0
 
-	for i := 0; i < len(normalized); i++ {
+	for i := 0; i < len(itemMap); i++ {
 		result := <-results
-
-		// Initialize or get existing item
-		if items[result.key] == nil {
-			// Extract type and id from key
-			parts := strings.SplitN(result.key, "/", 2)
-			items[result.key] = map[string]interface{}{
-				"type": parts[0],
-				"id":   parts[1],
-			}
-		}
-
-		// Merge data into item
-		for k, v := range result.data {
-			items[result.key][k] = v
-		}
-
+		items[result.key] = result.data
 		if result.hasErr {
 			errorCount++
 		}
