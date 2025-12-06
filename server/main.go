@@ -76,7 +76,6 @@ func main() {
 	ui.PrintKeyValue("S3 Endpoint", config.S3Endpoint)
 	ui.PrintKeyValue("S3 Bucket", config.S3Bucket)
 	ui.PrintKeyValue("S3 Root", config.S3Root)
-	fmt.Println()
 
 	// Parse max versions (negative means unlimited)
 	maxVer := 10
@@ -85,6 +84,13 @@ func main() {
 	} else if v, err := strconv.Atoi(*maxVersions); err == nil {
 		maxVer = v
 	}
+
+	if maxVer < 0 {
+		ui.PrintKeyValue("Version Retention", "unlimited")
+	} else {
+		ui.PrintKeyValue("Version Retention", strconv.Itoa(maxVer))
+	}
+	fmt.Println()
 
 	// Create S3/Wasabi storage client
 	storageClient, err := storage.NewS3Storage(storage.S3Config{
