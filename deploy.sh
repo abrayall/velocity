@@ -203,20 +203,91 @@ else
     if echo "$APPS_RESPONSE" | grep -q "\"name\":\"$APP_NAME\""; then
         echo -e "${GREEN}✓ App '$APP_NAME' already exists${NC}"
 
-        # Get the app URL
-        APP_URL=$(echo "$APPS_RESPONSE" | python3 -c "
+        # Get the app ID and URL
+        APP_INFO=$(echo "$APPS_RESPONSE" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 for app in data.get('apps', []):
     if app.get('spec', {}).get('name') == '$APP_NAME':
-        print(app.get('live_url', ''))
+        print(app.get('id', '') + '|' + app.get('live_url', ''))
         break
 " 2>/dev/null)
+        APP_ID=$(echo "$APP_INFO" | cut -d'|' -f1)
+        APP_URL=$(echo "$APP_INFO" | cut -d'|' -f2)
 
         if [ -n "$APP_URL" ]; then
             echo -e "${BLUE}  URL:${NC} $APP_URL"
         fi
-        echo -e "${GRAY}  Deployment will be triggered automatically by deploy_on_push${NC}"
+
+        # Fetch current spec and check if update needed
+        CURRENT_SPEC=$(curl -s -X GET \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.digitalocean.com/v2/apps/$APP_ID")
+
+        # Define desired spec values
+        DESIRED_FEATURES='["buildpack-stack=ubuntu-22","disable-edge-cache"]'
+        DESIRED_DOMAINS='[{"domain":"velocity.ee","type":"PRIMARY"},{"domain":"api.velocity.ee","type":"ALIAS"}]'
+
+        # Compare and update spec if needed
+        UPDATE_SPEC=$(echo "$CURRENT_SPEC" | python3 -c "
+import sys, json
+
+data = json.load(sys.stdin)
+spec = data.get('app', {}).get('spec', {})
+changed = False
+
+# Desired values
+desired_features = set(['buildpack-stack=ubuntu-22', 'disable-edge-cache'])
+desired_domains = [
+    {'domain': 'velocity.ee', 'type': 'PRIMARY'},
+    {'domain': 'api.velocity.ee', 'type': 'ALIAS'}
+]
+
+# Check features
+current_features = set(spec.get('features', []))
+if current_features != desired_features:
+    spec['features'] = list(desired_features)
+    changed = True
+
+# Check domains
+current_domains = spec.get('domains', [])
+current_domain_set = {(d.get('domain'), d.get('type')) for d in current_domains}
+desired_domain_set = {(d.get('domain'), d.get('type')) for d in desired_domains}
+if current_domain_set != desired_domain_set:
+    spec['domains'] = desired_domains
+    changed = True
+
+# Check region
+if spec.get('region') != 'nyc':
+    spec['region'] = 'nyc'
+    changed = True
+
+if changed:
+    print(json.dumps({'spec': spec}))
+else:
+    print('NO_CHANGES')
+" 2>/dev/null)
+
+        if [ "$UPDATE_SPEC" = "NO_CHANGES" ]; then
+            echo -e "${GRAY}  App spec is up to date${NC}"
+            echo -e "${GRAY}  Deployment will be triggered automatically by deploy_on_push${NC}"
+        else
+            echo -e "${YELLOW}  Updating app spec...${NC}"
+
+            UPDATE_RESPONSE=$(curl -s -X PUT \
+                -H "Authorization: Bearer $TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$UPDATE_SPEC" \
+                "https://api.digitalocean.com/v2/apps/$APP_ID")
+
+            if echo "$UPDATE_RESPONSE" | grep -q '"app"'; then
+                echo -e "${GREEN}✓ App spec updated${NC}"
+            else
+                echo -e "${RED}✗ Failed to update app spec${NC}"
+                echo -e "${GRAY}  Response: $UPDATE_RESPONSE${NC}"
+            fi
+        fi
     else
         echo -e "${BLUE}Creating app '$APP_NAME'...${NC}"
 
