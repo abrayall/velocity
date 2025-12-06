@@ -12,6 +12,7 @@ Velocity is a headless content management system designed for modern application
 - **Content Workflow** - Draft → Pending → Live state transitions with approval gates
 - **Multi-tenant** - Isolated content per tenant with tenant-specific schema overrides
 - **Versioning** - Full version history with restore capability (powered by S3 versioning)
+- **Metadata** - Custom tags/labels on content stored as S3 user metadata
 - **Streaming** - Large file support with direct streaming (no memory buffering)
 - **HTTP Caching** - ETag and Last-Modified headers with conditional request support (304 Not Modified)
 - **Comments** - Review comments on draft/pending content with resolution tracking
@@ -232,6 +233,49 @@ Fetch multiple content items in a single request with parallel S3 fetches:
 
 Set `"content-type": "url"` to get a URL instead of content (useful for images/assets).
 
+Set `"content-type": "metadata"` to get only the metadata without fetching content.
+
+### Metadata
+
+Store custom metadata (tags, labels, etc.) on content items. Metadata is stored as S3 user metadata.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/content/{type}/{id}/metadata` | Get metadata |
+| `PUT` | `/api/content/{type}/{id}/metadata` | Replace all metadata |
+| `PATCH` | `/api/content/{type}/{id}/metadata` | Merge/update metadata |
+| `DELETE` | `/api/content/{type}/{id}/metadata` | Remove specific keys |
+
+**Set metadata on create/update:**
+```bash
+curl -X POST http://localhost:8080/api/content/articles/hello \
+  -H "Content-Type: application/json" \
+  -H "X-Meta-Author: john@example.com" \
+  -H "X-Meta-Category: news" \
+  -H "X-Meta-Tags: featured,homepage" \
+  -d '{"title": "Hello"}'
+```
+
+**Get metadata:**
+```bash
+curl http://localhost:8080/api/content/articles/hello/metadata
+# {"author": "john@example.com", "category": "news", "tags": "featured,homepage"}
+```
+
+**Update metadata (merge):**
+```bash
+curl -X PATCH http://localhost:8080/api/content/articles/hello/metadata \
+  -H "Content-Type: application/json" \
+  -d '{"status": "reviewed"}'
+```
+
+**Remove metadata keys:**
+```bash
+curl -X DELETE http://localhost:8080/api/content/articles/hello/metadata \
+  -H "Content-Type: application/json" \
+  -d '{"keys": ["status"]}'
+```
+
 ### Public Content URLs
 
 Direct content access for embedding in HTML (images, CSS, JS, etc.):
@@ -385,8 +429,26 @@ velocity content create articles my-article -d '{"title": "New Article"}' --tena
 # Upload a file
 velocity content create images logo.png --file logo.png --tenant demo
 
+# Upload with metadata
+velocity content create images logo.png --file logo.png --metadata "author:john,category:branding"
+
+# Create with JSON metadata
+velocity content create articles post -d '{"title":"Post"}' -m '{"author":"john","tags":"news"}'
+
 # Update a file
 velocity content update pages home.html --file home.html --tenant demo
+
+# Get metadata
+velocity content metadata get articles post
+
+# Set metadata (replaces all)
+velocity content metadata set articles post -m "author:jane,status:published"
+
+# Update metadata (merge)
+velocity content metadata update articles post -m "reviewed:true"
+
+# Remove metadata keys
+velocity content metadata remove articles post status reviewed
 ```
 
 ### CLI Options
