@@ -20,12 +20,13 @@ import (
 )
 
 var (
-	endpoint  string
-	apiKey    string
-	tenant    string
-	outputFmt string
-	dataFlag  string
-	fileFlag  string
+	endpoint     string
+	apiKey       string
+	tenant       string
+	outputFmt    string
+	dataFlag     string
+	fileFlag     string
+	metadataFlag string
 )
 
 var rootCmd = &cobra.Command{
@@ -148,6 +149,7 @@ func init() {
 	}
 	createCmd.Flags().StringVarP(&dataFlag, "data", "d", "", "JSON data for the content item")
 	createCmd.Flags().StringVarP(&fileFlag, "file", "f", "", "File to upload")
+	createCmd.Flags().StringVarP(&metadataFlag, "metadata", "m", "", "Metadata as JSON or key:value,key:value format")
 
 	updateCmd := &cobra.Command{
 		Use:   "update <type> <id>",
@@ -157,6 +159,7 @@ func init() {
 	}
 	updateCmd.Flags().StringVarP(&dataFlag, "data", "d", "", "JSON data for the content item")
 	updateCmd.Flags().StringVarP(&fileFlag, "file", "f", "", "File to upload")
+	updateCmd.Flags().StringVarP(&metadataFlag, "metadata", "m", "", "Metadata as JSON or key:value,key:value format")
 
 	deleteCmd := &cobra.Command{
 		Use:   "delete <type> <id>",
@@ -165,7 +168,44 @@ func init() {
 		Run:   runDelete,
 	}
 
-	contentCmd.AddCommand(listCmd, getCmd, createCmd, updateCmd, deleteCmd)
+	// Metadata subcommand group
+	metadataCmd := &cobra.Command{
+		Use:   "metadata",
+		Short: "Manage content metadata",
+	}
+
+	metadataGetCmd := &cobra.Command{
+		Use:   "get <type> <id>",
+		Short: "Get metadata for a content item",
+		Args:  cobra.ExactArgs(2),
+		Run:   runMetadataGet,
+	}
+
+	metadataSetCmd := &cobra.Command{
+		Use:   "set <type> <id>",
+		Short: "Set metadata on a content item (replaces all)",
+		Args:  cobra.ExactArgs(2),
+		Run:   runMetadataSet,
+	}
+	metadataSetCmd.Flags().StringVarP(&metadataFlag, "metadata", "m", "", "Metadata as JSON or key:value,key:value format")
+
+	metadataUpdateCmd := &cobra.Command{
+		Use:   "update <type> <id>",
+		Short: "Update/merge metadata on a content item",
+		Args:  cobra.ExactArgs(2),
+		Run:   runMetadataUpdate,
+	}
+	metadataUpdateCmd.Flags().StringVarP(&metadataFlag, "metadata", "m", "", "Metadata as JSON or key:value,key:value format")
+
+	metadataRemoveCmd := &cobra.Command{
+		Use:   "remove <type> <id> <key> [keys...]",
+		Short: "Remove metadata keys from a content item",
+		Args:  cobra.MinimumNArgs(3),
+		Run:   runMetadataRemove,
+	}
+
+	metadataCmd.AddCommand(metadataGetCmd, metadataSetCmd, metadataUpdateCmd, metadataRemoveCmd)
+	contentCmd.AddCommand(listCmd, getCmd, createCmd, updateCmd, deleteCmd, metadataCmd)
 	rootCmd.AddCommand(contentCmd)
 }
 
@@ -257,11 +297,16 @@ func runCreate(cmd *cobra.Command, args []string) {
 	id := args[1]
 	client := newClient()
 
+	metadata, err := parseMetadata()
+	if err != nil {
+		ui.PrintError("Failed to parse metadata: %v", err)
+		os.Exit(1)
+	}
+
 	var result map[string]interface{}
-	var err error
 
 	if fileFlag != "" {
-		result, err = client.uploadFile(contentType, id, fileFlag)
+		result, err = client.uploadFile(contentType, id, fileFlag, metadata)
 	} else {
 		var data map[string]interface{}
 		data, err = parseData()
@@ -269,7 +314,7 @@ func runCreate(cmd *cobra.Command, args []string) {
 			ui.PrintError("Failed to parse data: %v", err)
 			os.Exit(1)
 		}
-		result, err = client.createContent(contentType, id, data)
+		result, err = client.createContentWithMetadata(contentType, id, data, metadata)
 	}
 
 	if err != nil {
@@ -290,10 +335,14 @@ func runUpdate(cmd *cobra.Command, args []string) {
 	id := args[1]
 	client := newClient()
 
-	var err error
+	metadata, err := parseMetadata()
+	if err != nil {
+		ui.PrintError("Failed to parse metadata: %v", err)
+		os.Exit(1)
+	}
 
 	if fileFlag != "" {
-		_, err = client.uploadFile(contentType, id, fileFlag)
+		_, err = client.uploadFile(contentType, id, fileFlag, metadata)
 	} else {
 		var data map[string]interface{}
 		data, err = parseData()
@@ -301,7 +350,7 @@ func runUpdate(cmd *cobra.Command, args []string) {
 			ui.PrintError("Failed to parse data: %v", err)
 			os.Exit(1)
 		}
-		_, err = client.updateContent(contentType, id, data)
+		_, err = client.updateContentWithMetadata(contentType, id, data, metadata)
 	}
 
 	if err != nil {
@@ -323,6 +372,94 @@ func runDelete(cmd *cobra.Command, args []string) {
 	}
 
 	ui.PrintSuccess("Deleted %s: %s", contentType, id)
+}
+
+func runMetadataGet(cmd *cobra.Command, args []string) {
+	contentType := args[0]
+	id := args[1]
+	client := newClient()
+
+	metadata, err := client.getMetadata(contentType, id)
+	if err != nil {
+		ui.PrintError("Failed to get metadata: %v", err)
+		os.Exit(1)
+	}
+
+	if outputFmt == "json" {
+		printJSON(metadata)
+		return
+	}
+
+	fmt.Println(ui.Header(fmt.Sprintf("Metadata: %s/%s", contentType, id)))
+	if len(metadata) == 0 {
+		fmt.Println("  No metadata")
+		return
+	}
+	for key, value := range metadata {
+		fmt.Printf("  %s: %s\n", key, value)
+	}
+}
+
+func runMetadataSet(cmd *cobra.Command, args []string) {
+	contentType := args[0]
+	id := args[1]
+	client := newClient()
+
+	metadata, err := parseMetadata()
+	if err != nil {
+		ui.PrintError("Failed to parse metadata: %v", err)
+		os.Exit(1)
+	}
+
+	if metadata == nil {
+		ui.PrintError("No metadata provided, use --metadata flag")
+		os.Exit(1)
+	}
+
+	if err := client.setMetadata(contentType, id, metadata); err != nil {
+		ui.PrintError("Failed to set metadata: %v", err)
+		os.Exit(1)
+	}
+
+	ui.PrintSuccess("Set metadata on %s/%s", contentType, id)
+}
+
+func runMetadataUpdate(cmd *cobra.Command, args []string) {
+	contentType := args[0]
+	id := args[1]
+	client := newClient()
+
+	metadata, err := parseMetadata()
+	if err != nil {
+		ui.PrintError("Failed to parse metadata: %v", err)
+		os.Exit(1)
+	}
+
+	if metadata == nil {
+		ui.PrintError("No metadata provided, use --metadata flag")
+		os.Exit(1)
+	}
+
+	if err := client.updateMetadata(contentType, id, metadata); err != nil {
+		ui.PrintError("Failed to update metadata: %v", err)
+		os.Exit(1)
+	}
+
+	ui.PrintSuccess("Updated metadata on %s/%s", contentType, id)
+}
+
+func runMetadataRemove(cmd *cobra.Command, args []string) {
+	contentType := args[0]
+	id := args[1]
+	keys := args[2:]
+	client := newClient()
+
+	if err := client.removeMetadata(contentType, id, keys); err != nil {
+		ui.PrintError("Failed to remove metadata: %v", err)
+		os.Exit(1)
+	}
+
+	ui.PrintSuccess("Removed metadata keys from %s/%s", contentType, id)
 }
 
 // Helpers
@@ -352,6 +489,48 @@ func parseData() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
+	return result, nil
+}
+
+// parseMetadata parses metadata from --metadata flag
+// Supports JSON format: {"key":"value"} or key:value format: key1:value1,key2:value2
+func parseMetadata() (map[string]string, error) {
+	if metadataFlag == "" {
+		return nil, nil
+	}
+
+	// Try JSON first
+	if strings.HasPrefix(strings.TrimSpace(metadataFlag), "{") {
+		var result map[string]string
+		if err := json.Unmarshal([]byte(metadataFlag), &result); err != nil {
+			return nil, fmt.Errorf("invalid JSON metadata: %w", err)
+		}
+		return result, nil
+	}
+
+	// Parse key:value,key:value format
+	result := make(map[string]string)
+	pairs := strings.Split(metadataFlag, ",")
+	for _, pair := range pairs {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		parts := strings.SplitN(pair, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid metadata format '%s', expected key:value", pair)
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if key == "" {
+			return nil, fmt.Errorf("metadata key cannot be empty")
+		}
+		result[key] = value
+	}
+
+	if len(result) == 0 {
+		return nil, nil
+	}
 	return result, nil
 }
 
@@ -489,9 +668,46 @@ func (c *client) getContent(contentType, id string) (map[string]interface{}, err
 }
 
 func (c *client) createContent(contentType, id string, body map[string]interface{}) (map[string]interface{}, error) {
-	data, err := c.request("POST", "/api/content/"+contentType+"/"+id, body)
+	return c.createContentWithMetadata(contentType, id, body, nil)
+}
+
+func (c *client) createContentWithMetadata(contentType, id string, body map[string]interface{}, metadata map[string]string) (map[string]interface{}, error) {
+	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal body: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", c.baseURL+"/api/content/"+contentType+"/"+id, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
+	if c.tenant != "" {
+		req.Header.Set("X-Tenant", c.tenant)
+	}
+
+	// Add metadata headers
+	for key, value := range metadata {
+		req.Header.Set("X-Meta-"+key, value)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(data))
 	}
 
 	var result map[string]interface{}
@@ -502,7 +718,7 @@ func (c *client) createContent(contentType, id string, body map[string]interface
 	return result, nil
 }
 
-func (c *client) uploadFile(contentType, id, filePath string) (map[string]interface{}, error) {
+func (c *client) uploadFile(contentType, id, filePath string, metadata map[string]string) (map[string]interface{}, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
@@ -529,6 +745,11 @@ func (c *client) uploadFile(contentType, id, filePath string) (map[string]interf
 		req.Header.Set("X-Tenant", c.tenant)
 	}
 
+	// Add metadata headers
+	for key, value := range metadata {
+		req.Header.Set("X-Meta-"+key, value)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -553,9 +774,46 @@ func (c *client) uploadFile(contentType, id, filePath string) (map[string]interf
 }
 
 func (c *client) updateContent(contentType, id string, body map[string]interface{}) (map[string]interface{}, error) {
-	data, err := c.request("PUT", "/api/content/"+contentType+"/"+id, body)
+	return c.updateContentWithMetadata(contentType, id, body, nil)
+}
+
+func (c *client) updateContentWithMetadata(contentType, id string, body map[string]interface{}, metadata map[string]string) (map[string]interface{}, error) {
+	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal body: %w", err)
+	}
+
+	req, err := http.NewRequest("PUT", c.baseURL+"/api/content/"+contentType+"/"+id, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
+	if c.tenant != "" {
+		req.Header.Set("X-Tenant", c.tenant)
+	}
+
+	// Add metadata headers
+	for key, value := range metadata {
+		req.Header.Set("X-Meta-"+key, value)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(data))
 	}
 
 	var result map[string]interface{}
@@ -568,5 +826,35 @@ func (c *client) updateContent(contentType, id string, body map[string]interface
 
 func (c *client) deleteContent(contentType, id string) error {
 	_, err := c.request("DELETE", "/api/content/"+contentType+"/"+id, nil)
+	return err
+}
+
+func (c *client) getMetadata(contentType, id string) (map[string]string, error) {
+	data, err := c.request("GET", "/api/content/"+contentType+"/"+id+"/metadata", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]string
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (c *client) setMetadata(contentType, id string, metadata map[string]string) error {
+	_, err := c.request("PUT", "/api/content/"+contentType+"/"+id+"/metadata", metadata)
+	return err
+}
+
+func (c *client) updateMetadata(contentType, id string, metadata map[string]string) error {
+	_, err := c.request("PATCH", "/api/content/"+contentType+"/"+id+"/metadata", metadata)
+	return err
+}
+
+func (c *client) removeMetadata(contentType, id string, keys []string) error {
+	body := map[string][]string{"keys": keys}
+	_, err := c.request("DELETE", "/api/content/"+contentType+"/"+id+"/metadata", body)
 	return err
 }

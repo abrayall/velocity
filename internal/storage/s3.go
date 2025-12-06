@@ -71,6 +71,7 @@ type ContentItem struct {
 	LastModified time.Time
 	Size         int64
 	ETag         string
+	Metadata     map[string]string
 }
 
 // ContentStream represents a streamable content item
@@ -82,6 +83,7 @@ type ContentStream struct {
 	LastModified time.Time
 	Size         int64
 	ETag         string
+	Metadata     map[string]string
 }
 
 // ContentVersion represents a specific version of content
@@ -289,7 +291,7 @@ func (c *Client) Put(ctx context.Context, tenant string, contentType string, id 
 }
 
 // PutStream stores content from a reader in S3/Wasabi with a specific state
-func (c *Client) PutStream(ctx context.Context, tenant string, contentType string, id string, ext string, body io.Reader, contentLength int64, mimeType string, state State) (*ContentItem, error) {
+func (c *Client) PutStream(ctx context.Context, tenant string, contentType string, id string, ext string, body io.Reader, contentLength int64, mimeType string, state State, metadata map[string]string) (*ContentItem, error) {
 	if state == "" {
 		state = StateLive
 	}
@@ -301,6 +303,11 @@ func (c *Client) PutStream(ctx context.Context, tenant string, contentType strin
 		Body:          body,
 		ContentLength: aws.Int64(contentLength),
 		ContentType:   aws.String(mimeType),
+	}
+
+	// Add metadata if provided
+	if len(metadata) > 0 {
+		input.Metadata = metadata
 	}
 
 	result, err := c.s3Client.PutObject(ctx, input)
@@ -317,6 +324,7 @@ func (c *Client) PutStream(ctx context.Context, tenant string, contentType strin
 		Key:         key,
 		ContentType: mimeType,
 		VersionID:   versionID,
+		Metadata:    metadata,
 		Size:        contentLength,
 	}, nil
 }
@@ -458,6 +466,7 @@ func (c *Client) getStreamByKey(ctx context.Context, key string, versionID strin
 		LastModified: lastMod,
 		Size:         size,
 		ETag:         etag,
+		Metadata:     result.Metadata,
 	}, nil
 }
 
@@ -1306,4 +1315,95 @@ func (c *Client) DeleteWebhook(ctx context.Context, tenant string, webhookID str
 	}
 
 	return nil
+}
+
+// =============================================================================
+// Metadata Operations
+// =============================================================================
+
+// GetMetadata retrieves only the metadata for a content item
+func (c *Client) GetMetadata(ctx context.Context, tenant string, contentType string, id string, ext string, state State) (map[string]string, error) {
+	if state == "" {
+		state = StateLive
+	}
+	key := c.contentKey(tenant, contentType, id, ext, state)
+
+	result, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get metadata: %w", err)
+	}
+
+	return result.Metadata, nil
+}
+
+// SetMetadata replaces all metadata on a content item (copies object to itself)
+func (c *Client) SetMetadata(ctx context.Context, tenant string, contentType string, id string, ext string, state State, metadata map[string]string) error {
+	if state == "" {
+		state = StateLive
+	}
+	key := c.contentKey(tenant, contentType, id, ext, state)
+
+	// Copy object to itself with new metadata
+	copySource := fmt.Sprintf("%s/%s", c.bucket, key)
+
+	_, err := c.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:            aws.String(c.bucket),
+		CopySource:        aws.String(copySource),
+		Key:               aws.String(key),
+		Metadata:          metadata,
+		MetadataDirective: types.MetadataDirectiveReplace,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set metadata: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateMetadata merges new metadata with existing (copies object to itself)
+func (c *Client) UpdateMetadata(ctx context.Context, tenant string, contentType string, id string, ext string, state State, updates map[string]string) error {
+	if state == "" {
+		state = StateLive
+	}
+
+	// Get existing metadata
+	existing, err := c.GetMetadata(ctx, tenant, contentType, id, ext, state)
+	if err != nil {
+		return err
+	}
+
+	// Merge updates
+	if existing == nil {
+		existing = make(map[string]string)
+	}
+	for k, v := range updates {
+		existing[k] = v
+	}
+
+	// Set merged metadata
+	return c.SetMetadata(ctx, tenant, contentType, id, ext, state, existing)
+}
+
+// DeleteMetadataKeys removes specific metadata keys (copies object to itself)
+func (c *Client) DeleteMetadataKeys(ctx context.Context, tenant string, contentType string, id string, ext string, state State, keys []string) error {
+	if state == "" {
+		state = StateLive
+	}
+
+	// Get existing metadata
+	existing, err := c.GetMetadata(ctx, tenant, contentType, id, ext, state)
+	if err != nil {
+		return err
+	}
+
+	// Remove specified keys
+	for _, k := range keys {
+		delete(existing, k)
+	}
+
+	// Set updated metadata
+	return c.SetMetadata(ctx, tenant, contentType, id, ext, state, existing)
 }

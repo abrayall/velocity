@@ -106,6 +106,22 @@ func (s *Server) listTypesHandler(w http.ResponseWriter, r *http.Request) {
 // Content Handlers
 // =============================================================================
 
+// extractMetadata extracts X-Meta-* headers into a metadata map
+func extractMetadata(r *http.Request) map[string]string {
+	metadata := make(map[string]string)
+	for key, values := range r.Header {
+		if strings.HasPrefix(strings.ToLower(key), "x-meta-") && len(values) > 0 {
+			// Strip "X-Meta-" prefix and lowercase the key
+			metaKey := strings.ToLower(key[7:])
+			metadata[metaKey] = values[0]
+		}
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
+}
+
 // bulkGetHandler fetches multiple content items in parallel
 func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
@@ -163,6 +179,36 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
+			// If requesting metadata only, fetch just the metadata
+			if requestedType == "metadata" {
+				// Check if ID has an extension
+				ext := extHint
+				idPart := id
+				if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
+					ext = id[idx+1:]
+					idPart = id[:idx]
+				}
+				if ext == "" {
+					ext = "json"
+				}
+
+				metadata, err := s.storage.GetMetadata(r.Context(), tenant, contentType, idPart, ext, storage.StateLive)
+				if err != nil {
+					res["error"] = "not_found"
+					res["message"] = fmt.Sprintf("Content '%s' not found", id)
+					results <- itemResult{key: key, result: res}
+					return
+				}
+
+				res["content-type"] = "metadata"
+				if metadata == nil {
+					metadata = make(map[string]string)
+				}
+				res["metadata"] = metadata
+				results <- itemResult{key: key, result: res}
+				return
+			}
+
 			stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, storage.StateLive)
 			if err != nil {
 				res["error"] = "not_found"
@@ -184,6 +230,11 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 			res["content-type"] = stream.ContentType
 			res["version"] = stream.VersionID
 			res["last_modified"] = stream.LastModified.UTC().Format(time.RFC3339)
+
+			// Include metadata if available
+			if stream.Metadata != nil && len(stream.Metadata) > 0 {
+				res["metadata"] = stream.Metadata
+			}
 
 			// Handle content based on type
 			if strings.HasPrefix(stream.ContentType, "application/json") {
@@ -291,6 +342,9 @@ func (s *Server) createContentHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 	state := getState(r)
 
+	// Extract metadata from X-Meta-* headers
+	metadata := extractMetadata(r)
+
 	// Check if ID already has an extension
 	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
 		ext := id[idx+1:]
@@ -304,7 +358,7 @@ func (s *Server) createContentHandler(w http.ResponseWriter, r *http.Request) {
 		body := r.Body
 		defer r.Body.Close()
 
-		item, err := s.storage.PutStream(r.Context(), tenant, contentType, id, ext, body, contentLength, mimeType, state)
+		item, err := s.storage.PutStream(r.Context(), tenant, contentType, id, ext, body, contentLength, mimeType, state, metadata)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
 			return
@@ -368,7 +422,7 @@ func (s *Server) createContentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store content via streaming
-	item, err := s.storage.PutStream(r.Context(), tenant, contentType, id, ext, body, contentLength, mimeType, state)
+	item, err := s.storage.PutStream(r.Context(), tenant, contentType, id, ext, body, contentLength, mimeType, state, metadata)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
 		return
@@ -531,6 +585,9 @@ func (s *Server) updateContentHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 	state := getState(r)
 
+	// Extract metadata from X-Meta-* headers (nil if not provided means keep existing)
+	metadata := extractMetadata(r)
+
 	// Check if ID already has an extension
 	var ext string
 	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
@@ -547,7 +604,7 @@ func (s *Server) updateContentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store content via streaming (S3 versioning handles the update for live content)
-	item, err := s.storage.PutStream(r.Context(), tenant, contentType, id, ext, r.Body, contentLength, mimeType, state)
+	item, err := s.storage.PutStream(r.Context(), tenant, contentType, id, ext, r.Body, contentLength, mimeType, state, metadata)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
 		return
@@ -1553,5 +1610,165 @@ func (s *Server) deleteWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id":      webhookID,
 		"message": "Webhook deleted successfully",
+	})
+}
+
+// =============================================================================
+// Metadata Handlers
+// =============================================================================
+
+// getMetadataHandler gets metadata only for a content item
+func (s *Server) getMetadataHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	contentType := vars["type"]
+	id := vars["id"]
+
+	tenant := s.getTenant(r)
+	state := getState(r)
+
+	// Check if ID has an extension
+	var ext string
+	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
+		ext = id[idx+1:]
+		id = id[:idx]
+	} else {
+		ext = "json" // default
+	}
+
+	metadata, err := s.storage.GetMetadata(r.Context(), tenant, contentType, id, ext, state)
+	if err != nil {
+		if strings.Contains(err.Error(), "NotFound") || strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Content '%s' not found", id))
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+
+	writeJSON(w, http.StatusOK, metadata)
+}
+
+// setMetadataHandler replaces all metadata on a content item
+func (s *Server) setMetadataHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	contentType := vars["type"]
+	id := vars["id"]
+
+	tenant := s.getTenant(r)
+	state := getState(r)
+
+	// Check if ID has an extension
+	var ext string
+	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
+		ext = id[idx+1:]
+		id = id[:idx]
+	} else {
+		ext = "json" // default
+	}
+
+	var metadata map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&metadata); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+
+	if err := s.storage.SetMetadata(r.Context(), tenant, contentType, id, ext, state, metadata); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id":       id,
+		"metadata": metadata,
+		"message":  "Metadata updated successfully",
+	})
+}
+
+// updateMetadataHandler merges new metadata with existing
+func (s *Server) updateMetadataHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	contentType := vars["type"]
+	id := vars["id"]
+
+	tenant := s.getTenant(r)
+	state := getState(r)
+
+	// Check if ID has an extension
+	var ext string
+	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
+		ext = id[idx+1:]
+		id = id[:idx]
+	} else {
+		ext = "json" // default
+	}
+
+	var updates map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+
+	if err := s.storage.UpdateMetadata(r.Context(), tenant, contentType, id, ext, state, updates); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	// Get updated metadata to return
+	metadata, _ := s.storage.GetMetadata(r.Context(), tenant, contentType, id, ext, state)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id":       id,
+		"metadata": metadata,
+		"message":  "Metadata updated successfully",
+	})
+}
+
+// deleteMetadataHandler removes specific metadata keys
+func (s *Server) deleteMetadataHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	contentType := vars["type"]
+	id := vars["id"]
+
+	tenant := s.getTenant(r)
+	state := getState(r)
+
+	// Check if ID has an extension
+	var ext string
+	if idx := strings.LastIndex(id, "."); idx != -1 && idx < len(id)-1 {
+		ext = id[idx+1:]
+		id = id[:idx]
+	} else {
+		ext = "json" // default
+	}
+
+	var req struct {
+		Keys []string `json:"keys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+
+	if len(req.Keys) == 0 {
+		writeError(w, http.StatusBadRequest, "missing_keys", "No keys specified to delete")
+		return
+	}
+
+	if err := s.storage.DeleteMetadataKeys(r.Context(), tenant, contentType, id, ext, state, req.Keys); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	// Get updated metadata to return
+	metadata, _ := s.storage.GetMetadata(r.Context(), tenant, contentType, id, ext, state)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"id":       id,
+		"metadata": metadata,
+		"message":  "Metadata keys deleted successfully",
 	})
 }

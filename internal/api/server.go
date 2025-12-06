@@ -112,6 +112,17 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/content/{type}/{id}/history/{version}", s.getHistoryHandler).Methods("GET")
 	api.HandleFunc("/content/{type}/{id}/diff", s.diffHandler).Methods("GET")
 
+	// Metadata routes
+	// GET    /api/content/{type}/{id}/metadata    - Get metadata only
+	// PUT    /api/content/{type}/{id}/metadata    - Replace all metadata
+	// PATCH  /api/content/{type}/{id}/metadata    - Merge/update metadata
+	// DELETE /api/content/{type}/{id}/metadata    - Remove specific keys
+
+	api.HandleFunc("/content/{type}/{id}/metadata", s.getMetadataHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id}/metadata", s.setMetadataHandler).Methods("PUT")
+	api.HandleFunc("/content/{type}/{id}/metadata", s.updateMetadataHandler).Methods("PATCH")
+	api.HandleFunc("/content/{type}/{id}/metadata", s.deleteMetadataHandler).Methods("DELETE")
+
 	// Schema routes (global schemas)
 	// GET    /api/schemas              - List global schemas
 	// GET    /api/schemas/{name}       - Get global schema
