@@ -1,18 +1,18 @@
 # Velocity
 
-A fast, headless CMS backed by S3/Wasabi storage with built-in versioning, multi-tenant support, and a content workflow system.
+A fast, headless CMS with built-in versioning, multi-tenant support, and a content workflow system.
 
 ## Overview
 
-Velocity is a headless content management system designed for modern applications. It provides a REST API for managing content with a powerful workflow system (draft → pending → live), automatic versioning through S3, and multi-tenant isolation. All content is stored in S3-compatible object storage (AWS S3, Wasabi, MinIO, etc.) with streaming support for large files.
+Velocity is a headless content management system designed for modern applications. It provides a REST API for managing content with a powerful workflow system (draft → pending → live), automatic versioning, and multi-tenant isolation. Supports S3-compatible storage backends (AWS S3, Wasabi, MinIO, etc.) with streaming for large files.
 
 ## Features
 
-- **S3/Wasabi Storage** - Content stored in S3-compatible object storage with automatic versioning
+- **Object Storage** - Supports S3-compatible backends (AWS S3, Wasabi, MinIO, etc.)
 - **Content Workflow** - Draft → Pending → Live state transitions with approval gates
 - **Multi-tenant** - Isolated content per tenant with tenant-specific schema overrides
-- **Versioning** - Full version history with restore capability (powered by S3 versioning)
-- **Metadata** - Custom tags/labels on content stored as S3 user metadata
+- **Versioning** - Full version history with restore capability
+- **Metadata** - Custom tags/labels on content items
 - **Streaming** - Large file support with direct streaming (no memory buffering)
 - **HTTP Caching** - ETag and Last-Modified headers with conditional request support (304 Not Modified)
 - **Comments** - Review comments on draft/pending content with resolution tracking
@@ -190,7 +190,7 @@ This allows safe development without affecting production data.
 
 ### Bulk Content Fetch
 
-Fetch multiple content items in a single request with parallel S3 fetches:
+Fetch multiple content items in a single request:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -237,7 +237,7 @@ Set `"content-type": "metadata"` to get only the metadata without fetching conte
 
 ### Metadata
 
-Store custom metadata (tags, labels, etc.) on content items. Metadata is stored as S3 user metadata.
+Store custom metadata (tags, labels, etc.) on content items:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -394,7 +394,7 @@ Velocity supports HTTP caching to reduce bandwidth and improve performance:
 - `ETag` - Content hash for cache validation
 - `Last-Modified` - Timestamp of last modification
 - `Cache-Control` - Caching directives
-- `X-Version-ID` - S3 version identifier
+- `X-Version-ID` - Version identifier
 - `X-Content-State` - Content state (draft/pending/live)
 
 **Conditional Requests:**
@@ -532,10 +532,10 @@ Required secrets:
 - [ ] **Schema Inheritance** - Tenant schemas extend global schemas
 
 ### Performance & Caching
-- [ ] **Server-Side Cache** - In-memory LRU cache to reduce S3 API calls
+- [ ] **Server-Side Cache** - In-memory LRU cache to reduce storage API calls
 - [ ] **Redis Cache** - Distributed caching for multi-instance deployments
 - [ ] **CDN Integration** - Cache invalidation hooks for CDN (CloudFront, Fastly)
-- [x] **Batch Operations** - Bulk fetch endpoint with parallel S3 requests
+- [x] **Batch Operations** - Bulk fetch endpoint with parallel requests
 
 ### Search & Discovery
 - [ ] **Full-Text Search** - Integration with Elasticsearch or Meilisearch
@@ -558,9 +558,9 @@ Required secrets:
 
 ### Observability
 - [ ] **Audit Logging** - Track who changed what and when
-- [ ] **Prometheus Metrics** - Request latency, error rates, S3 operations
+- [ ] **Prometheus Metrics** - Request latency, error rates, storage operations
 - [ ] **Distributed Tracing** - OpenTelemetry integration
-- [ ] **Health Checks** - Deep health checks including S3 connectivity
+- [ ] **Health Checks** - Deep health checks including storage connectivity
 
 ### API & Integration
 - [ ] **GraphQL API** - Alternative to REST API
