@@ -1,7 +1,11 @@
 package api
 
 import (
+	"embed"
+	"io/fs"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -11,6 +15,9 @@ import (
 	"velocity/internal/storage"
 	"velocity/internal/version"
 )
+
+//go:embed www/*
+var wwwFS embed.FS
 
 // Server represents the API server
 type Server struct {
@@ -110,7 +117,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/content/{type}/{id}/history/{version}", s.getHistoryHandler).Methods("GET")
 	api.HandleFunc("/content/{type}/{id}/diff", s.diffHandler).Methods("GET")
 
-	// Metadata routes
+	// Metadata routes (live content)
 	// GET    /api/content/{type}/{id}/metadata    - Get metadata only
 	// PUT    /api/content/{type}/{id}/metadata    - Replace all metadata
 	// PATCH  /api/content/{type}/{id}/metadata    - Merge/update metadata
@@ -120,6 +127,17 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/content/{type}/{id}/metadata", s.setMetadataHandler).Methods("PUT")
 	api.HandleFunc("/content/{type}/{id}/metadata", s.updateMetadataHandler).Methods("PATCH")
 	api.HandleFunc("/content/{type}/{id}/metadata", s.deleteMetadataHandler).Methods("DELETE")
+
+	// State-specific metadata routes
+	// GET    /api/content/{type}/{id}/{state}/metadata    - Get metadata for state
+	// PUT    /api/content/{type}/{id}/{state}/metadata    - Replace metadata for state
+	// PATCH  /api/content/{type}/{id}/{state}/metadata    - Merge metadata for state
+	// DELETE /api/content/{type}/{id}/{state}/metadata    - Remove metadata keys for state
+
+	api.HandleFunc("/content/{type}/{id}/{state}/metadata", s.getMetadataHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id}/{state}/metadata", s.setMetadataHandler).Methods("PUT")
+	api.HandleFunc("/content/{type}/{id}/{state}/metadata", s.updateMetadataHandler).Methods("PATCH")
+	api.HandleFunc("/content/{type}/{id}/{state}/metadata", s.deleteMetadataHandler).Methods("DELETE")
 
 	// State-specific content routes (MUST be after literal routes like /metadata, /versions, etc.)
 	api.HandleFunc("/content/{type}/{id}/{state}", s.getContentHandler).Methods("GET")
@@ -172,6 +190,38 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/webhooks/{id}", s.getWebhookHandler).Methods("GET")
 	api.HandleFunc("/webhooks/{id}", s.putWebhookHandler).Methods("PUT")
 	api.HandleFunc("/webhooks/{id}", s.deleteWebhookHandler).Methods("DELETE")
+
+	// Serve static website files at root
+	// Strip the "www" prefix from the embedded filesystem
+	wwwContent, err := fs.Sub(wwwFS, "www")
+	if err != nil {
+		log.Error("Failed to create sub filesystem for www: %v", err)
+		return
+	}
+
+	// Create file server for static assets
+	fileServer := http.FileServer(http.FS(wwwContent))
+
+	// Handle static assets (CSS, JS, images)
+	s.router.PathPrefix("/assets/").Handler(fileServer)
+
+	// Handle root path - serve index.html with dynamic values
+	s.router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Read and serve index.html
+		data, err := fs.ReadFile(wwwContent, "index.html")
+		if err != nil {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+
+		// Replace placeholders with dynamic values
+		html := string(data)
+		html = strings.ReplaceAll(html, "{{VERSION}}", version.GetVersion())
+		html = strings.ReplaceAll(html, "{{YEAR}}", strconv.Itoa(time.Now().Year()))
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(html))
+	}).Methods("GET")
 }
 
 // Handler returns the HTTP handler with CORS support

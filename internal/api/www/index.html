@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Velocity - Headless CMS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/assets/css/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <a href="/" class="logo">
+                <img src="/assets/images/logo-white.svg" alt="Velocity" class="logo-img logo-white">
+                <img src="/assets/images/logo-color.svg" alt="Velocity" class="logo-img logo-color">
+                <span class="logo-text">Velocity</span>
+            </a>
+            <nav class="nav">
+                <a href="#features">Features</a>
+                <a href="#getting-started">Get Started</a>
+                <a href="#api">API</a>
+                <a href="https://github.com/abrayall/velocity" target="_blank">GitHub</a>
+            </nav>
+            <button class="mobile-menu-toggle" aria-label="Toggle menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+        </div>
+    </header>
+
+    <section class="hero">
+        <div class="hero-bg"></div>
+        <div class="hero-content">
+            <h1>Content at <span class="highlight">Velocity</span></h1>
+            <p class="hero-subtitle">A blazing-fast headless CMS. Stream content of any size with built-in versioning, workflows, and multi-tenant support.</p>
+            <div class="hero-buttons">
+                <a href="#getting-started" class="btn btn-primary">Get Started</a>
+                <a href="#api" class="btn btn-outline">View API</a>
+            </div>
+            <div class="terminal hero-terminal">
+                <div class="terminal-header">
+                    <div class="terminal-dots">
+                        <span class="terminal-dot red"></span>
+                        <span class="terminal-dot yellow"></span>
+                        <span class="terminal-dot green"></span>
+                    </div>
+                    <span class="terminal-title">Terminal</span>
+                </div>
+                <div class="terminal-body">
+                    <div class="terminal-line"><span class="prompt">$</span> velocity content create articles/hello-world</div>
+                    <div class="terminal-line output success">Created articles/hello-world (draft)</div>
+                    <div class="terminal-line"><span class="prompt">$</span> velocity content publish articles/hello-world</div>
+                    <div class="terminal-line output success">Published articles/hello-world</div>
+                    <div class="terminal-line"><span class="prompt">$</span> curl https://api.example.com/api/content/articles/hello-world</div>
+                    <div class="terminal-line output">{"id":"hello-world","title":"Hello World",...}</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="features">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-tag">Features</span>
+                <h2>Everything you need for content management</h2>
+                <p>Built for developers who need speed, flexibility, and reliability.</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+                    </div>
+                    <h3>REST API</h3>
+                    <p>Simple, intuitive REST endpoints. Use from any language or framework. Works with curl.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+                    </div>
+                    <h3>Content Workflows</h3>
+                    <p>Draft, pending, and live states. Move content through approval workflows before publishing.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    </div>
+                    <h3>Full Versioning</h3>
+                    <p>Every change is tracked. Roll back to any previous version with a single command.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                    </div>
+                    <h3>Multi-Tenant</h3>
+                    <p>Isolate content by tenant. Perfect for SaaS applications and agencies managing multiple clients.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                    </div>
+                    <h3>Multiple Backends</h3>
+                    <p>Store content in S3, Wasabi, databases, or custom backends. Your data, your infrastructure.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+                    </div>
+                    <h3>Powerful CLI</h3>
+                    <p>Manage content from the command line. Create, update, publish, and rollback with simple commands.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="getting-started" class="getting-started">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-tag">Get Started</span>
+                <h2>Up and running in minutes</h2>
+                <p>Install the CLI and start managing content immediately.</p>
+            </div>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h3>Build and start the server</h3>
+                        <p>Clone the repository and build the server using Go. Configure storage with environment variables.</p>
+                        <div class="code-block">
+                            <div class="code-header">
+                                <span>Terminal</span>
+                                <button class="copy-btn" data-copy="go build -o velocity-server ./server">Copy</button>
+                            </div>
+                            <pre><code><span class="prompt">$</span> git clone https://github.com/abrayall/velocity.git
+<span class="prompt">$</span> cd velocity
+<span class="prompt">$</span> go build -o velocity-server ./server
+
+<span class="comment"># Configure S3/Wasabi storage</span>
+<span class="prompt">$</span> export S3_ENDPOINT=s3.wasabisys.com
+<span class="prompt">$</span> export S3_BUCKET=my-bucket
+<span class="prompt">$</span> export S3_ACCESS_KEY_ID=your-key
+<span class="prompt">$</span> export S3_SECRET_ACCESS_KEY=your-secret
+
+<span class="prompt">$</span> ./velocity-server --port 8080
+<span class="output success">Velocity 0.1.0 server is ready!</span></code></pre>
+                        </div>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3>Install the CLI</h3>
+                        <p>Build the CLI tool to manage content from the command line.</p>
+                        <div class="code-block">
+                            <div class="code-header">
+                                <span>Terminal</span>
+                                <button class="copy-btn" data-copy="go build -o velocity ./cli">Copy</button>
+                            </div>
+                            <pre><code><span class="prompt">$</span> go build -o velocity ./cli
+<span class="prompt">$</span> ./velocity --help
+<span class="output">Velocity CLI - Headless CMS client</span>
+<span class="output"></span>
+<span class="output">Usage: velocity [command]</span>
+<span class="output"></span>
+<span class="output">Commands:</span>
+<span class="output">  content    Manage content</span>
+<span class="output">  schema     Manage schemas</span>
+<span class="output">  version    Show version</span></code></pre>
+                        </div>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3>Create content</h3>
+                        <p>Start creating and managing content with the CLI or curl.</p>
+                        <div class="code-block">
+                            <div class="code-header">
+                                <span>Terminal</span>
+                                <button class="copy-btn" data-copy="velocity content create articles my-post -d '{&quot;title&quot;:&quot;My Post&quot;}'">Copy</button>
+                            </div>
+                            <pre><code><span class="prompt">$</span> velocity content create articles my-post -d '{"title":"My Post"}'
+<span class="output success">Created articles/my-post</span>
+
+<span class="prompt">$</span> velocity content list articles
+<span class="output">ID          TYPE       STATE   MODIFIED</span>
+<span class="output">my-post     articles   live    2025-01-15</span></code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="api" class="api-section">
+        <div class="container">
+            <div class="section-header">
+                <span class="section-tag">API</span>
+                <h2>Simple REST API</h2>
+                <p>Use the CLI or curl to interact with your content.</p>
+            </div>
+            <div class="api-tabs">
+                <button class="api-tab active" data-tab="curl">cURL</button>
+                <button class="api-tab" data-tab="cli">CLI</button>
+            </div>
+            <div class="api-examples">
+                <div class="api-example">
+                    <h3>Create Content</h3>
+                    <div class="code-block tab-content" data-tab="curl">
+                        <div class="code-header">
+                            <span>cURL</span>
+                            <button class="copy-btn">Copy</button>
+                        </div>
+                        <pre><code><span class="prompt">$</span> curl -X POST https://velocity.example.com/api/content/articles/hello \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant: demo" \
+    -d '{"title": "Hello World", "body": "Welcome!"}'
+
+<span class="output">{
+  "id": "hello",
+  "type": "articles",
+  "state": "live"
+}</span></code></pre>
+                    </div>
+                    <div class="code-block tab-content" data-tab="cli" style="display: none;">
+                        <div class="code-header">
+                            <span>CLI</span>
+                            <button class="copy-btn">Copy</button>
+                        </div>
+                        <pre><code><span class="prompt">$</span> velocity content create articles hello \
+    -d '{"title": "Hello World", "body": "Welcome!"}'
+
+<span class="output success">Created articles/hello</span></code></pre>
+                    </div>
+                </div>
+                <div class="api-example">
+                    <h3>Get Content</h3>
+                    <div class="code-block tab-content" data-tab="curl">
+                        <div class="code-header">
+                            <span>cURL</span>
+                            <button class="copy-btn">Copy</button>
+                        </div>
+                        <pre><code><span class="prompt">$</span> curl https://velocity.example.com/api/content/articles/hello
+
+<span class="output">{
+  "title": "Hello World",
+  "body": "Welcome!"
+}</span></code></pre>
+                    </div>
+                    <div class="code-block tab-content" data-tab="cli" style="display: none;">
+                        <div class="code-header">
+                            <span>CLI</span>
+                            <button class="copy-btn">Copy</button>
+                        </div>
+                        <pre><code><span class="prompt">$</span> velocity content get articles hello
+
+<span class="output">{
+  "title": "Hello World",
+  "body": "Welcome!"
+}</span></code></pre>
+                    </div>
+                </div>
+                <div class="api-example">
+                    <h3>List Content</h3>
+                    <div class="code-block tab-content" data-tab="curl">
+                        <div class="code-header">
+                            <span>cURL</span>
+                            <button class="copy-btn">Copy</button>
+                        </div>
+                        <pre><code><span class="prompt">$</span> curl https://velocity.example.com/api/content/articles
+
+<span class="output">{
+  "items": [
+    {"id": "hello", "type": "articles"},
+    {"id": "welcome", "type": "articles"}
+  ],
+  "count": 2
+}</span></code></pre>
+                    </div>
+                    <div class="code-block tab-content" data-tab="cli" style="display: none;">
+                        <div class="code-header">
+                            <span>CLI</span>
+                            <button class="copy-btn">Copy</button>
+                        </div>
+                        <pre><code><span class="prompt">$</span> velocity content list articles
+
+<span class="output">ID          TYPE       STATE   MODIFIED</span>
+<span class="output">hello       articles   live    2025-01-15</span>
+<span class="output">welcome     articles   live    2025-01-14</span></code></pre>
+                    </div>
+                </div>
+                <div class="api-example">
+                    <h3>Upload File</h3>
+                    <div class="code-block tab-content" data-tab="curl">
+                        <div class="code-header">
+                            <span>cURL</span>
+                            <button class="copy-btn">Copy</button>
+                        </div>
+                        <pre><code><span class="prompt">$</span> curl -X POST https://velocity.example.com/api/content/images/logo \
+    -H "X-Tenant: demo" \
+    -F "file=@logo.png"
+
+<span class="output">{
+  "id": "logo",
+  "type": "images",
+  "content-type": "image/png"
+}</span></code></pre>
+                    </div>
+                    <div class="code-block tab-content" data-tab="cli" style="display: none;">
+                        <div class="code-header">
+                            <span>CLI</span>
+                            <button class="copy-btn">Copy</button>
+                        </div>
+                        <pre><code><span class="prompt">$</span> velocity content create images logo.png --file logo.png
+
+<span class="output success">Created images/logo.png</span></code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="cta">
+        <div class="container">
+            <h2>Ready to get started?</h2>
+            <p>Deploy Velocity and start managing your content today.</p>
+            <div class="cta-buttons">
+                <a href="https://github.com/abrayall/velocity" class="btn btn-primary" target="_blank">View on GitHub</a>
+                <a href="#getting-started" class="btn btn-outline-light">Installation Guide</a>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <a href="/" class="logo">
+                        <img src="/assets/images/logo-white.svg" alt="Velocity" class="logo-img">
+                        <span class="logo-text">Velocity</span>
+                    </a>
+                    <p>Velocity is a modern headless CMS designed for developers who need a fast, flexible content management solution.</p>
+                    <p>It features content workflows with draft, pending, and live states, full version history with rollback support, multi-tenant isolation, and pluggable storage backends including S3, Wasabi, and databases.</p>
+                    <p>Perfect for static sites, mobile apps, and any project that needs structured content delivered via API.</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-col">
+                        <h4>Product</h4>
+                        <a href="#features">Features</a>
+                        <a href="#getting-started">Get Started</a>
+                        <a href="#api">API Reference</a>
+                    </div>
+                    <div class="footer-col">
+                        <h4>Resources</h4>
+                        <a href="https://github.com/abrayall/velocity" target="_blank">GitHub</a>
+                        <a href="https://github.com/abrayall/velocity/issues" target="_blank">Issues</a>
+                        <a href="https://github.com/abrayall/velocity/releases" target="_blank">Releases</a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p class="copyright">&copy; {{YEAR}} Velocity. Open source under MIT License.</p>
+                <p class="version">v{{VERSION}}</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="/assets/js/main.js"></script>
+</body>
+</html>

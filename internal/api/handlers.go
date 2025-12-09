@@ -311,6 +311,9 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Prevent caching of bulk API responses
+	w.Header().Set("Cache-Control", "no-store")
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"items":  items,
 		"count":  len(items),

@@ -92,29 +92,39 @@ func main() {
 	}
 	fmt.Println()
 
-	// Create S3/Wasabi storage client
-	storageClient, err := storage.NewS3Storage(storage.S3Config{
-		Endpoint:        config.S3Endpoint,
-		Region:          config.S3Region,
-		Bucket:          config.S3Bucket,
-		AccessKeyID:     config.S3AccessKeyID,
-		SecretAccessKey: config.S3SecretAccessKey,
-		Root:            config.S3Root,
-		MaxVersions:     maxVer,
-	})
-	if err != nil {
-		log.Fatal("Failed to create storage client: %v", err)
-	}
+	// Create storage client
+	var storageClient storage.Storage
 
-	// Check storage connection
-	log.Info("Connecting to storage...")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	if config.S3AccessKeyID == "" || config.S3SecretAccessKey == "" {
+		// No S3 credentials configured - use noop storage
+		log.Info("No S3 credentials configured, using noop storage (API endpoints will return errors)")
+		storageClient = storage.NewNoopStorage()
+	} else {
+		// Create S3/Wasabi storage client
+		s3Client, err := storage.NewS3Storage(storage.S3Config{
+			Endpoint:        config.S3Endpoint,
+			Region:          config.S3Region,
+			Bucket:          config.S3Bucket,
+			AccessKeyID:     config.S3AccessKeyID,
+			SecretAccessKey: config.S3SecretAccessKey,
+			Root:            config.S3Root,
+			MaxVersions:     maxVer,
+		})
+		if err != nil {
+			log.Fatal("Failed to create storage client: %v", err)
+		}
 
-	if err := storageClient.CheckConnection(ctx); err != nil {
-		log.Fatal("Storage connection failed: %v", err)
+		// Check storage connection
+		log.Info("Connecting to storage...")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := s3Client.CheckConnection(ctx); err != nil {
+			log.Fatal("Storage connection failed: %v", err)
+		}
+		log.Info("Connected to storage.")
+		storageClient = s3Client
 	}
-	log.Info("Connected to storage.")
 
 	// Create the API server
 	server := api.NewServer(storageClient, &api.ServerConfig{
