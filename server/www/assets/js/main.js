@@ -99,7 +99,7 @@ const observer = new IntersectionObserver((entries) => {
 }, observerOptions);
 
 // Observe elements for animation
-document.querySelectorAll('.feature-card, .step, .api-example').forEach(el => {
+document.querySelectorAll('.feature-card, .step, .cli-card, .pricing-card').forEach(el => {
     observer.observe(el);
 });
 
@@ -129,25 +129,3 @@ function updateActiveNav() {
 window.addEventListener('scroll', updateActiveNav);
 updateActiveNav();
 
-// API tabs switching
-const apiTabs = document.querySelectorAll('.api-tab');
-const tabContents = document.querySelectorAll('.tab-content');
-
-apiTabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-        const targetTab = tab.dataset.tab;
-
-        // Update active tab
-        apiTabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-
-        // Show/hide content
-        tabContents.forEach(content => {
-            if (content.dataset.tab === targetTab) {
-                content.style.display = 'block';
-            } else {
-                content.style.display = 'none';
-            }
-        });
-    });
-});

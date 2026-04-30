@@ -166,6 +166,10 @@ type Storage interface {
 	PutWebhook(ctx context.Context, tenant string, webhook *Webhook) error
 	DeleteWebhook(ctx context.Context, tenant, webhookID string) error
 
+	// Tenants
+	ListTenants(ctx context.Context) ([]string, error)
+	ListContentTypes(ctx context.Context, tenant string) ([]string, error)
+
 	// Metadata
 	GetMetadata(ctx context.Context, tenant, contentType, id, ext string, state State) (map[string]string, error)
 	SetMetadata(ctx context.Context, tenant, contentType, id, ext string, state State, metadata map[string]string) error

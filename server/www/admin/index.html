@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Velocity Admin</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/images/logo-color.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/admin/css/admin.css">
+</head>
+<body>
+    <div class="admin-layout">
+        <aside class="sidebar">
+            <a class="sidebar-header" href="/" style="text-decoration:none;color:inherit;">
+                <img src="/assets/images/logo-white.svg" alt="Velocity" style="width:24px;height:24px;">
+                <span>Velocity</span>
+            </a>
+            <nav class="sidebar-nav" id="sidebarNav">
+                <a class="sidebar-link active" href="#/">Dashboard</a>
+            </nav>
+        </aside>
+        <div class="main-content">
+            <header class="admin-header">
+                <div class="admin-header-left">
+                    <label class="text-sm text-muted" for="tenantSelect">Tenant:</label>
+                    <select id="tenantSelect" class="tenant-select"></select>
+                </div>
+                <div class="admin-header-right">
+                    <button id="themeToggle" class="theme-toggle" title="Toggle theme">
+                        <svg id="themeIconDark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+                        <svg id="themeIconLight" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+                    </button>
+                    <a href="#" id="logoutBtn" class="btn btn-ghost btn-sm">Logout</a>
+                </div>
+            </header>
+            <div class="view-container" id="viewContainer">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+    <script src="/admin/js/auth.js"></script>
+    <script src="/admin/js/editor.js"></script>
+    <script src="/admin/js/admin.js"></script>
+    <script>
+        // Theme toggle
+        (function() {
+            var saved = localStorage.getItem('velocity_theme') || 'dark';
+            if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+            updateIcons(saved);
+
+            document.getElementById('themeToggle').addEventListener('click', function() {
+                var current = document.documentElement.getAttribute('data-theme');
+                var next = current === 'light' ? 'dark' : 'light';
+                if (next === 'light') {
+                    document.documentElement.setAttribute('data-theme', 'light');
+                } else {
+                    document.documentElement.removeAttribute('data-theme');
+                }
+                localStorage.setItem('velocity_theme', next);
+                updateIcons(next);
+            });
+
+            function updateIcons(theme) {
+                var sun = document.getElementById('themeIconDark');
+                var moon = document.getElementById('themeIconLight');
+                if (sun && moon) {
+                    sun.style.display = theme === 'dark' ? 'block' : 'none';
+                    moon.style.display = theme === 'light' ? 'block' : 'none';
+                }
+            }
+        })();
+        Admin.init();
+    </script>
+</body>
+</html>

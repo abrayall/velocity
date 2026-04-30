@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"flag"
 	"fmt"
 	"net/http"
@@ -18,6 +19,9 @@ import (
 	"velocity/internal/ui"
 	"velocity/internal/version"
 )
+
+//go:embed www/*
+var wwwFS embed.FS
 
 
 func main() {
@@ -129,7 +133,7 @@ func main() {
 	// Create the API server
 	server := api.NewServer(storageClient, &api.ServerConfig{
 		Port: config.Port,
-	})
+	}, wwwFS)
 
 	// Create HTTP server with graceful shutdown
 	addr := fmt.Sprintf(":%s", config.Port)

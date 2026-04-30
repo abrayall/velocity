@@ -1283,6 +1283,82 @@ func (s *S3Storage) DeleteWebhook(ctx context.Context, tenant string, webhookID 
 }
 
 // =============================================================================
+// Tenant Operations
+// =============================================================================
+
+// tenantsPrefix returns the prefix for listing tenants
+func (s *S3Storage) tenantsPrefix() string {
+	return path.Join(s.root, "tenants") + "/"
+}
+
+// ListTenants returns all tenant names by listing common prefixes under /{root}/tenants/
+func (s *S3Storage) ListTenants(ctx context.Context) ([]string, error) {
+	prefix := s.tenantsPrefix()
+
+	input := &s3.ListObjectsV2Input{
+		Bucket:    aws.String(s.bucket),
+		Prefix:    aws.String(prefix),
+		Delimiter: aws.String("/"),
+	}
+
+	var tenants []string
+	paginator := s3.NewListObjectsV2Paginator(s.s3Client, input)
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list tenants: %w", err)
+		}
+
+		for _, cp := range page.CommonPrefixes {
+			if cp.Prefix != nil {
+				// Extract tenant name from prefix like "{root}/tenants/{tenant}/"
+				name := strings.TrimPrefix(*cp.Prefix, prefix)
+				name = strings.TrimSuffix(name, "/")
+				if name != "" {
+					tenants = append(tenants, name)
+				}
+			}
+		}
+	}
+
+	return tenants, nil
+}
+
+// ListContentTypes returns all content type names for a tenant by listing prefixes under /{root}/tenants/{tenant}/content/
+func (s *S3Storage) ListContentTypes(ctx context.Context, tenant string) ([]string, error) {
+	prefix := path.Join(s.root, "tenants", tenant, "content") + "/"
+
+	input := &s3.ListObjectsV2Input{
+		Bucket:    aws.String(s.bucket),
+		Prefix:    aws.String(prefix),
+		Delimiter: aws.String("/"),
+	}
+
+	var types []string
+	paginator := s3.NewListObjectsV2Paginator(s.s3Client, input)
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list content types: %w", err)
+		}
+
+		for _, cp := range page.CommonPrefixes {
+			if cp.Prefix != nil {
+				name := strings.TrimPrefix(*cp.Prefix, prefix)
+				name = strings.TrimSuffix(name, "/")
+				if name != "" && !strings.HasPrefix(name, "_") {
+					types = append(types, name)
+				}
+			}
+		}
+	}
+
+	return types, nil
+}
+
+// =============================================================================
 // Metadata Operations
 // =============================================================================
 

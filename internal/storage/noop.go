@@ -190,6 +190,16 @@ func (s *NoopStorage) DeleteWebhook(ctx context.Context, tenant, webhookID strin
 	return ErrStorageNotConfigured
 }
 
+// Tenants - returns ErrStorageNotConfigured
+
+func (s *NoopStorage) ListTenants(ctx context.Context) ([]string, error) {
+	return nil, ErrStorageNotConfigured
+}
+
+func (s *NoopStorage) ListContentTypes(ctx context.Context, tenant string) ([]string, error) {
+	return nil, ErrStorageNotConfigured
+}
+
 // Metadata - all return ErrStorageNotConfigured
 
 func (s *NoopStorage) GetMetadata(ctx context.Context, tenant, contentType, id, ext string, state State) (map[string]string, error) {

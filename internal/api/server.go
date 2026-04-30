@@ -16,14 +16,12 @@ import (
 	"velocity/internal/version"
 )
 
-//go:embed www/*
-var wwwFS embed.FS
-
 // Server represents the API server
 type Server struct {
 	router  *mux.Router
 	storage storage.Storage
 	config  *ServerConfig
+	wwwFS   embed.FS
 }
 
 // ServerConfig holds server configuration
@@ -32,11 +30,12 @@ type ServerConfig struct {
 }
 
 // NewServer creates a new API server
-func NewServer(storageClient storage.Storage, config *ServerConfig) *Server {
+func NewServer(storageClient storage.Storage, config *ServerConfig, wwwFS embed.FS) *Server {
 	s := &Server{
 		router:  mux.NewRouter(),
 		storage: storageClient,
 		config:  config,
+		wwwFS:   wwwFS,
 	}
 
 	s.setupRoutes()
@@ -58,15 +57,25 @@ func (s *Server) setupRoutes() {
 	// Add request logging
 	api.Use(s.loggingHandler)
 
+	// Auth endpoints (public)
+	// POST   /api/login             - Login and get session token
+	// POST   /api/logout            - Logout and clear session
+	// GET    /api/session           - Check session validity
+	api.HandleFunc("/login", s.loginHandler).Methods("POST")
+	api.HandleFunc("/logout", s.logoutHandler).Methods("POST")
+	api.HandleFunc("/session", s.sessionHandler).Methods("GET")
+
 	// Utility endpoints
 	// GET    /api                   - API info (name, version)
 	// GET    /api/health            - Health check
 	// GET    /api/version           - Server version
 	// GET    /api/types             - List available content types
+	// GET    /api/tenants           - List all tenants
 	api.HandleFunc("", s.infoHandler).Methods("GET")
 	api.HandleFunc("/health", s.healthHandler).Methods("GET")
 	api.HandleFunc("/version", s.versionHandler).Methods("GET")
 	api.HandleFunc("/types", s.listTypesHandler).Methods("GET")
+	api.HandleFunc("/tenants", s.listTenantsHandler).Methods("GET")
 
 	// Content routes
 	// GET    /api/content/{type}                 - List all live items
@@ -193,7 +202,7 @@ func (s *Server) setupRoutes() {
 
 	// Serve static website files at root
 	// Strip the "www" prefix from the embedded filesystem
-	wwwContent, err := fs.Sub(wwwFS, "www")
+	wwwContent, err := fs.Sub(s.wwwFS, "www")
 	if err != nil {
 		log.Error("Failed to create sub filesystem for www: %v", err)
 		return
@@ -204,6 +213,40 @@ func (s *Server) setupRoutes() {
 
 	// Handle static assets (CSS, JS, images)
 	s.router.PathPrefix("/assets/").Handler(fileServer)
+
+	// Admin routes
+	// /admin/login - unprotected login page
+	s.router.HandleFunc("/admin/login", func(w http.ResponseWriter, r *http.Request) {
+		data, err := fs.ReadFile(wwwContent, "admin/login.html")
+		if err != nil {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(data)
+	}).Methods("GET")
+
+	// Admin static assets (CSS, JS) - unprotected so login page can load them
+	s.router.PathPrefix("/admin/css/").Handler(http.StripPrefix("/admin/", http.FileServer(http.FS(func() fs.FS {
+		sub, _ := fs.Sub(wwwContent, "admin")
+		return sub
+	}()))))
+	s.router.PathPrefix("/admin/js/").Handler(http.StripPrefix("/admin/", http.FileServer(http.FS(func() fs.FS {
+		sub, _ := fs.Sub(wwwContent, "admin")
+		return sub
+	}()))))
+
+	// /admin/* - protected admin SPA (everything except /admin/login and static assets)
+	adminHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, err := fs.ReadFile(wwwContent, "admin/index.html")
+		if err != nil {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(data)
+	})
+	s.router.PathPrefix("/admin").Handler(s.adminAuthMiddleware(adminHandler))
 
 	// Handle root path - serve index.html with dynamic values
 	s.router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

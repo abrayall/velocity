@@ -98,18 +98,53 @@ func getState(r *http.Request) storage.State {
 // Types/Schema Handlers
 // =============================================================================
 
-// listTypesHandler returns all available content types (from schemas)
+// listTypesHandler returns all available content types (from schemas + actual content directories)
 func (s *Server) listTypesHandler(w http.ResponseWriter, r *http.Request) {
 	tenant := s.getTenant(r)
 
+	typeSet := make(map[string]bool)
+
+	// Get types from schemas
 	schemas, err := s.storage.ListAllSchemas(r.Context(), tenant)
-	if err != nil || schemas == nil {
-		schemas = []string{}
+	if err == nil {
+		for _, t := range schemas {
+			typeSet[t] = true
+		}
+	}
+
+	// Get types from actual content directories
+	contentTypes, err := s.storage.ListContentTypes(r.Context(), tenant)
+	if err == nil {
+		for _, t := range contentTypes {
+			typeSet[t] = true
+		}
+	}
+
+	types := make([]string, 0, len(typeSet))
+	for t := range typeSet {
+		types = append(types, t)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"types": schemas,
-		"count": len(schemas),
+		"types": types,
+		"count": len(types),
+	})
+}
+
+// =============================================================================
+// Tenant Handlers
+// =============================================================================
+
+// listTenantsHandler returns all tenants
+func (s *Server) listTenantsHandler(w http.ResponseWriter, r *http.Request) {
+	tenants, err := s.storage.ListTenants(r.Context())
+	if err != nil || tenants == nil {
+		tenants = []string{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"tenants": tenants,
+		"count":   len(tenants),
 	})
 }
 
