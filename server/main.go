@@ -127,7 +127,38 @@ func main() {
 			log.Fatal("Storage connection failed: %v", err)
 		}
 		log.Info("Connected to storage.")
-		storageClient = s3Client
+		cached := storage.NewCachedStorage(s3Client, storage.CacheConfig{
+			MaxTTL:         1 * time.Hour,
+			MaxContentSize: 1 << 20,   // 1MB per entry
+			MaxMemory:      256 << 20, // 256MB total
+			SweepInterval:  1 * time.Minute,
+		})
+
+		// Start gossip-based cache invalidation if enabled
+		if getEnv("GOSSIP_ENABLED", "") != "" {
+			gossipCfg := storage.DefaultGossipConfig()
+			if addr := getEnv("GOSSIP_BIND_ADDR", ""); addr != "" {
+				gossipCfg.BindAddr = addr
+			}
+			if port := getEnv("GOSSIP_BIND_PORT", ""); port != "" {
+				if p, err := strconv.Atoi(port); err == nil {
+					gossipCfg.BindPort = p
+				}
+			}
+			if peers := getEnv("GOSSIP_PEERS", ""); peers != "" {
+				gossipCfg.Peers = strings.Split(peers, ",")
+			}
+			gossipCfg.EnableMDNS = getEnv("GOSSIP_MDNS", "true") != "false"
+
+			invalidator, err := storage.NewGossipInvalidator(gossipCfg)
+			if err != nil {
+				log.Error("Failed to start gossip invalidator: %v", err)
+			} else {
+				cached.SetInvalidator(invalidator)
+			}
+		}
+
+		storageClient = cached
 	}
 
 	// Create the API server

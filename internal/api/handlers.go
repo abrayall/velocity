@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -150,6 +151,7 @@ func (s *Server) listTypesHandler(w http.ResponseWriter, r *http.Request) {
 	for t := range typeSet {
 		types = append(types, t)
 	}
+	sort.Strings(types)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"types": types,
@@ -434,6 +436,51 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Expand wildcard patterns (IDs ending with /* or equal to *)
+	type rawItem struct {
+		Type        string
+		ID          string
+		MimeHint    string
+		Attribute   string
+		Attributes  []string
+	}
+	var expandedItems []rawItem
+
+	for _, item := range req.Items {
+		if strings.HasSuffix(item.ID, "/*") || item.ID == "*" {
+			// Expand directory wildcard
+			dirPrefix := strings.TrimSuffix(item.ID, "/*")
+			if dirPrefix == "*" {
+				dirPrefix = ""
+			}
+			if dirPrefix != "" && !strings.HasSuffix(dirPrefix, "/") {
+				dirPrefix += "/"
+			}
+
+			browseResult, err := s.storage.Browse(r.Context(), tenant, item.Type, dirPrefix, storage.StateLive)
+			if err == nil {
+				for _, bi := range browseResult.Items {
+					id, _ := extractIDAndExt(bi.Key, item.Type, storage.StateLive)
+					expandedItems = append(expandedItems, rawItem{
+						Type:       item.Type,
+						ID:         id,
+						MimeHint:   item.ContentType,
+						Attribute:  item.Attribute,
+						Attributes: item.Attributes,
+					})
+				}
+			}
+		} else {
+			expandedItems = append(expandedItems, rawItem{
+				Type:       item.Type,
+				ID:         item.ID,
+				MimeHint:   item.ContentType,
+				Attribute:  item.Attribute,
+				Attributes: item.Attributes,
+			})
+		}
+	}
+
 	// Deduplicate and collect attributes per type/id
 	type itemRequest struct {
 		Type       string
@@ -443,7 +490,7 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	itemMap := make(map[string]*itemRequest)
 
-	for _, item := range req.Items {
+	for _, item := range expandedItems {
 		key := item.Type + "/" + item.ID
 
 		// Get or create item request
@@ -452,15 +499,15 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 			ir = &itemRequest{
 				Type:       item.Type,
 				ID:         item.ID,
-				MimeHint:   item.ContentType,
+				MimeHint:   item.MimeHint,
 				Attributes: make(map[string]bool),
 			}
 			itemMap[key] = ir
 		}
 
 		// Update mime hint if provided
-		if item.ContentType != "" {
-			ir.MimeHint = item.ContentType
+		if item.MimeHint != "" {
+			ir.MimeHint = item.MimeHint
 		}
 
 		// Collect attributes
