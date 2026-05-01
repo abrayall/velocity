@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	stdlog "log"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -112,23 +114,29 @@ func NewGossipInvalidator(cfg GossipConfig) (*GossipInvalidator, error) {
 		RetransmitMult: 3,
 	}
 
+	// Auto-discover peers via service DNS if no explicit peers given
+	if len(cfg.Peers) == 0 {
+		if serviceName := detectServiceName(); serviceName != "" {
+			cfg.Peers = []string{fmt.Sprintf("%s:%d", serviceName, cfg.BindPort)}
+			log.Info("Auto-detected cluster service: %s", serviceName)
+		}
+	}
+
 	// Join known peers if provided
 	if len(cfg.Peers) > 0 {
 		joined, err := list.Join(cfg.Peers)
 		if err != nil {
-			log.Error("Failed to join cluster peers: %v", err)
-		} else {
+			log.Debug("Peer join attempt: %v", err)
+		} else if joined > 0 {
 			log.Info("Joined %d cluster peer(s)", joined)
 		}
 	}
 
-	// Start mDNS advertisement and discovery
-	if cfg.EnableMDNS {
+	// Start mDNS advertisement and discovery (skip if service DNS is available)
+	if cfg.EnableMDNS && len(cfg.Peers) == 0 {
 		gi.startMDNS(cfg)
 	}
 
-	log.Info("Cluster enabled on %s:%d as '%s'",
-		cfg.BindAddr, cfg.BindPort, cfg.NodeName)
 
 	return gi, nil
 }
@@ -190,6 +198,32 @@ func (gi *GossipInvalidator) handleMessage(data []byte) {
 	}
 }
 
+// detectServiceName tries to derive the Kubernetes/DO service name from the hostname.
+// Hostnames look like "velocity-server-6c758b648f-xscmq" — the service is "velocity-server".
+// We strip the last two dash-separated segments (replicaset hash + pod hash).
+func detectServiceName() string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		return ""
+	}
+
+	parts := strings.Split(hostname, "-")
+	if len(parts) < 3 {
+		return ""
+	}
+
+	// Service name is everything except the last two segments
+	serviceName := strings.Join(parts[:len(parts)-2], "-")
+
+	// Verify it resolves via DNS
+	addrs, err := net.LookupHost(serviceName)
+	if err != nil || len(addrs) == 0 {
+		return ""
+	}
+
+	return serviceName
+}
+
 // getLocalIPs returns non-loopback IPv4 addresses from network interfaces.
 func getLocalIPs() []net.IP {
 	var ips []net.IP
@@ -236,16 +270,18 @@ func (gi *GossipInvalidator) startMDNS(cfg GossipConfig) {
 		return
 	}
 
+	// Silence the standard logger during mDNS setup (it logs IPv6 warnings directly)
+	origOutput := stdlog.Writer()
+	stdlog.SetOutput(io.Discard)
 	server, err := mdns.NewServer(&mdns.Config{Zone: service})
+	stdlog.SetOutput(origOutput)
 	if err != nil {
 		log.Error("mDNS server start failed: %v", err)
 		return
 	}
 	gi.mdnsServer = server
-	log.Debug("mDNS advertising as %s", mdnsServiceName)
 
 	// Discover peers in background
-	log.Info("Looking for peers...")
 	go gi.discoverPeers()
 }
 
@@ -294,7 +330,6 @@ func (gi *GossipInvalidator) NumMembers() int {
 }
 
 func (gi *GossipInvalidator) runDiscovery() {
-	log.Debug("Looking for peers...")
 	entriesCh := make(chan *mdns.ServiceEntry, 10)
 	found := 0
 
@@ -323,7 +358,11 @@ func (gi *GossipInvalidator) runDiscovery() {
 	params.Timeout = 3 * time.Second
 	params.DisableIPv6 = true
 
-	if err := mdns.Query(params); err != nil {
+	origOutput := stdlog.Writer()
+	stdlog.SetOutput(io.Discard)
+	err := mdns.Query(params)
+	stdlog.SetOutput(origOutput)
+	if err != nil {
 		log.Debug("mDNS query error: %v", err)
 	}
 	close(entriesCh)
