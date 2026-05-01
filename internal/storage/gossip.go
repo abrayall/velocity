@@ -190,13 +190,47 @@ func (gi *GossipInvalidator) handleMessage(data []byte) {
 	}
 }
 
+// getLocalIPs returns non-loopback IPv4 addresses from network interfaces.
+func getLocalIPs() []net.IP {
+	var ips []net.IP
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip != nil && ip.To4() != nil {
+				ips = append(ips, ip)
+			}
+		}
+	}
+	return ips
+}
+
 // startMDNS advertises this node via mDNS and discovers peers.
 func (gi *GossipInvalidator) startMDNS(cfg GossipConfig) {
 	port := cfg.BindPort
 	host, _ := os.Hostname()
 
+	// Get IPs from interfaces directly (hostname may not resolve in containers)
+	ips := getLocalIPs()
+
 	// Advertise this node
-	service, err := mdns.NewMDNSService(host, mdnsServiceName, "", "", port, nil, []string{"velocity cache invalidation"})
+	service, err := mdns.NewMDNSService(host, mdnsServiceName, "", "", port, ips, []string{"velocity cache invalidation"})
 	if err != nil {
 		log.Error("mDNS service creation failed: %v", err)
 		return
