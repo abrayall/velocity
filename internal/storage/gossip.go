@@ -159,19 +159,19 @@ func (gi *GossipInvalidator) rejoinLoop(peers []string) {
 	}
 }
 
-// httpDiscoveryLoop periodically queries the service HTTP endpoint to discover peer gossip addresses.
+// httpDiscoveryLoop queries the service HTTP endpoint to discover peers at startup.
 func (gi *GossipInvalidator) httpDiscoveryLoop() {
 	// Wait for the HTTP server to start
 	time.Sleep(3 * time.Second)
-	gi.discoverViaHTTP()
 
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for {
+	// Try a few times to find peers, then stop
+	for i := 0; i < 5; i++ {
+		if gi.list.NumMembers() > 1 {
+			return // already found peers
+		}
+		gi.discoverViaHTTP()
 		select {
-		case <-ticker.C:
-			gi.discoverViaHTTP()
+		case <-time.After(3 * time.Second):
 		case <-gi.stopCh:
 			return
 		}
