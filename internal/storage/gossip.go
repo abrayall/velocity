@@ -254,7 +254,7 @@ func (gi *GossipInvalidator) Publish(_ context.Context, keys []string) error {
 	}
 
 	gi.broadcasts.QueueBroadcast(&gossipBroadcast{data: data})
-	log.Debug("Cluster invalidation published (%d keys)", len(keys))
+	log.Info("Broadcasting invalidation to peers (%d keys).", len(keys))
 	return nil
 }
 
@@ -519,6 +519,13 @@ type gossipEvents struct {
 	gi          *GossipInvalidator
 }
 
+func (e *gossipEvents) memberCount() int {
+	if e.gi == nil || e.gi.list == nil {
+		return 0
+	}
+	return e.gi.list.NumMembers()
+}
+
 func (e *gossipEvents) memberNames() string {
 	if e.gi == nil || e.gi.list == nil {
 		return ""
@@ -540,9 +547,13 @@ func shortName(name string) string {
 }
 
 func (e *gossipEvents) logMembers() {
-	if names := e.memberNames(); names != "" {
-		log.Info("Cluster members: %s", names)
-	}
+	// Delay slightly — memberlist may not have updated its member list yet when the event fires
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if names := e.memberNames(); names != "" {
+			log.Info("Cluster members: %s", names)
+		}
+	}()
 }
 
 func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
