@@ -628,6 +628,11 @@ td.col-actions {
     user-select: none;
 }
 
+.action-link.disabled {
+    opacity: 0.25;
+    cursor: default;
+}
+
 .action-link.danger {
     color: var(--color-primary);
 }

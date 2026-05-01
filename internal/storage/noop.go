@@ -219,6 +219,16 @@ func (s *NoopStorage) CreateFolder(ctx context.Context, tenant, contentType, fol
 	return ErrStorageNotConfigured
 }
 
+// Directory Index - returns ErrStorageNotConfigured
+
+func (s *NoopStorage) GetDirectoryIndex(ctx context.Context, tenant, contentType, prefix string, state State) (*DirectoryIndex, error) {
+	return nil, ErrStorageNotConfigured
+}
+
+func (s *NoopStorage) PutDirectoryIndex(ctx context.Context, tenant, contentType, prefix string, state State, index *DirectoryIndex) error {
+	return ErrStorageNotConfigured
+}
+
 // Sessions - all return ErrStorageNotConfigured
 
 func (s *NoopStorage) PutSession(ctx context.Context, token string, expiresAt time.Time) error {

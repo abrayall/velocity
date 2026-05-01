@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"io"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -116,6 +118,69 @@ type BrowseResult struct {
 	Items   []*ContentItem `json:"items"`
 }
 
+// DirectoryIndex represents the _index.json file for a directory
+type DirectoryIndex struct {
+	Order []string `json:"order"`
+}
+
+// ApplyOrder sorts folders and items based on the given order.
+// Entries in the order list come first (in order), followed by unordered entries alphabetically.
+func (b *BrowseResult) ApplyOrder(order []string) {
+	orderMap := make(map[string]int, len(order))
+	for i, name := range order {
+		orderMap[name] = i
+	}
+
+	// Sort folders
+	sort.SliceStable(b.Folders, func(i, j int) bool {
+		oi, oki := orderMap[b.Folders[i]]
+		oj, okj := orderMap[b.Folders[j]]
+		if oki && okj {
+			return oi < oj
+		}
+		if oki {
+			return true
+		}
+		if okj {
+			return false
+		}
+		return b.Folders[i] < b.Folders[j]
+	})
+
+	// Sort items by extracting the filename (last segment without extension)
+	sort.SliceStable(b.Items, func(i, j int) bool {
+		nameI := itemName(b.Items[i].Key)
+		nameJ := itemName(b.Items[j].Key)
+		oi, oki := orderMap[nameI]
+		oj, okj := orderMap[nameJ]
+		if oki && okj {
+			return oi < oj
+		}
+		if oki {
+			return true
+		}
+		if okj {
+			return false
+		}
+		return nameI < nameJ
+	})
+}
+
+// itemName extracts the base name without extension from a key
+func itemName(key string) string {
+	// Get last path segment
+	idx := strings.LastIndex(key, "/")
+	name := key
+	if idx != -1 {
+		name = key[idx+1:]
+	}
+	// Remove extension
+	if dotIdx := strings.LastIndex(name, "."); dotIdx != -1 {
+		name = name[:dotIdx]
+	}
+	return name
+}
+
 // Storage defines the interface for content storage backends.
 // Implementations must be safe for concurrent use.
 type Storage interface {
@@ -187,6 +252,10 @@ type Storage interface {
 
 	// Folders
 	CreateFolder(ctx context.Context, tenant, contentType, folderPath string, state State) error
+
+	// Directory Index
+	GetDirectoryIndex(ctx context.Context, tenant, contentType, prefix string, state State) (*DirectoryIndex, error)
+	PutDirectoryIndex(ctx context.Context, tenant, contentType, prefix string, state State, index *DirectoryIndex) error
 
 	// Metadata
 	GetMetadata(ctx context.Context, tenant, contentType, id, ext string, state State) (map[string]string, error)

@@ -107,6 +107,12 @@ func (s *Server) setupRoutes() {
 	// POST   /api/content/{type}/_mkdir          - Create a folder within a content type
 	api.HandleFunc("/content/{type}/_mkdir", s.createFolderHandler).Methods("POST")
 
+	// Directory index
+	// GET    /api/content/{type}/_index          - Get directory index (order)
+	// PUT    /api/content/{type}/_index          - Set directory index (order)
+	api.HandleFunc("/content/{type}/_index", s.getDirectoryIndexHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/_index", s.putDirectoryIndexHandler).Methods("PUT")
+
 	// Literal suffix routes (registered FIRST so they match before catch-all)
 	// POST   /api/content/{type}/{id}/transition - Move content between states
 	api.HandleFunc("/content/{type}/{id:.+}/transition", s.transitionHandler).Methods("POST")

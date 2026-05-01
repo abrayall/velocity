@@ -386,49 +386,98 @@ var Admin = (function() {
                 return;
             }
 
+            // Build a unified ordered list of entries (folders then items)
+            var allEntries = [];
+            folders.forEach(function(folder) {
+                allEntries.push({ type: 'folder', name: folder });
+            });
+            items.forEach(function(item) {
+                allEntries.push({ type: 'item', name: item.id.split('/').pop(), item: item });
+            });
+
+            var totalEntries = allEntries.length;
+
             var html = '<table><thead><tr>' +
                 '<th>Name</th><th>Type</th><th>Last Modified</th><th>Size</th><th class="col-actions">Actions</th>' +
                 '</tr></thead><tbody>';
 
-            // Show folders first (as directory rows)
-            folders.forEach(function(folder) {
-                var folderPath = prefix ? prefix.replace(/\/$/, '') + '/' + folder : folder;
-                html += '<tr class="folder-row">' +
-                    '<td><a href="javascript:void(0)" class="table-link browse-folder" data-prefix="' + escapeAttr(folderPath) + '">' +
-                        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>' +
-                        escapeHtml(folder) + '</a></td>' +
-                    '<td class="text-muted text-sm">directory</td>' +
-                    '<td class="text-muted text-sm">-</td>' +
-                    '<td class="text-muted text-sm">-</td>' +
-                    '<td class="col-actions"></td></tr>';
-            });
+            allEntries.forEach(function(entry, idx) {
+                var arrowUp = idx > 0 ?
+                    '<button class="action-link reorder-btn" data-idx="' + idx + '" data-dir="up" title="Move up">&uarr;</button>' :
+                    '<span class="action-link disabled">&uarr;</span>';
+                var arrowDown = idx < totalEntries - 1 ?
+                    '<button class="action-link reorder-btn" data-idx="' + idx + '" data-dir="down" title="Move down">&darr;</button>' :
+                    '<span class="action-link disabled">&darr;</span>';
 
-            // Show items — display only the filename (last segment), not the full path
-            items.forEach(function(item) {
-                var modified = item.last_modified ? new Date(item.last_modified).toLocaleDateString() : '-';
-                var size = formatSize(item.size || 0);
-                var ct = item.content_type || '-';
-                var itemHash = '#/content/' + type + '/' + item.id;
-                // Show just the item name (last path segment)
-                var displayName = item.id.split('/').pop();
-                html += '<tr>' +
-                    '<td><a class="table-link" href="' + itemHash + '">' +
-                        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>' +
-                        escapeHtml(displayName) + '</a></td>' +
-                    '<td class="text-muted text-sm">' + escapeHtml(ct) + '</td>' +
-                    '<td class="text-muted text-sm">' + modified + '</td>' +
-                    '<td class="text-muted text-sm">' + size + '</td>' +
-                    '<td class="col-actions"><div class="table-actions">' +
-                        '<a href="' + itemHash + '" class="action-link">Edit</a>' +
-                        '<span class="action-sep">|</span>' +
-                        '<button class="action-link danger delete-item-btn" data-id="' + escapeAttr(item.id) + '">Delete</button>' +
-                        '<span class="action-sep">|</span>' +
-                        '<a href="' + itemHash + '/history" class="action-link">History</a>' +
-                    '</div></td></tr>';
+                if (entry.type === 'folder') {
+                    var folderPath = prefix ? prefix.replace(/\/$/, '') + '/' + entry.name : entry.name;
+                    html += '<tr class="folder-row">' +
+                        '<td><a href="javascript:void(0)" class="table-link browse-folder" data-prefix="' + escapeAttr(folderPath) + '">' +
+                            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>' +
+                            escapeHtml(entry.name) + '</a></td>' +
+                        '<td class="text-muted text-sm">directory</td>' +
+                        '<td class="text-muted text-sm">-</td>' +
+                        '<td class="text-muted text-sm">-</td>' +
+                        '<td class="col-actions"><div class="table-actions">' +
+                            arrowUp + arrowDown +
+                        '</div></td></tr>';
+                } else {
+                    var item = entry.item;
+                    var modified = item.last_modified ? new Date(item.last_modified).toLocaleDateString() : '-';
+                    var size = formatSize(item.size || 0);
+                    var ct = item.content_type || '-';
+                    var itemHash = '#/content/' + type + '/' + item.id;
+                    html += '<tr>' +
+                        '<td><a class="table-link" href="' + itemHash + '">' +
+                            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>' +
+                            escapeHtml(entry.name) + '</a></td>' +
+                        '<td class="text-muted text-sm">' + escapeHtml(ct) + '</td>' +
+                        '<td class="text-muted text-sm">' + modified + '</td>' +
+                        '<td class="text-muted text-sm">' + size + '</td>' +
+                        '<td class="col-actions"><div class="table-actions">' +
+                            '<a href="' + itemHash + '" class="action-link">Edit</a>' +
+                            '<span class="action-sep">|</span>' +
+                            '<button class="action-link danger delete-item-btn" data-id="' + escapeAttr(item.id) + '">Delete</button>' +
+                            '<span class="action-sep">|</span>' +
+                            '<a href="' + itemHash + '/history" class="action-link">History</a>' +
+                            '<span class="action-sep">|</span>' +
+                            arrowUp + arrowDown +
+                        '</div></td></tr>';
+                }
             });
 
             html += '</tbody></table>';
             tableEl.innerHTML = html;
+
+            // Wire reorder buttons
+            tableEl.querySelectorAll('.reorder-btn').forEach(function(btn) {
+                btn.addEventListener('click', async function() {
+                    var idx = parseInt(this.dataset.idx);
+                    var dir = this.dataset.dir;
+                    var swapIdx = dir === 'up' ? idx - 1 : idx + 1;
+
+                    // Swap in the order array
+                    var orderNames = allEntries.map(function(e) { return e.name; });
+                    var tmp = orderNames[idx];
+                    orderNames[idx] = orderNames[swapIdx];
+                    orderNames[swapIdx] = tmp;
+
+                    // Save to _index.json
+                    try {
+                        await fetch('/api/content/' + encodeURIComponent(type) + '/_index?prefix=' + encodeURIComponent(prefix || ''), {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Tenant': currentTenant
+                            },
+                            body: JSON.stringify({ order: orderNames })
+                        });
+                        renderContentList(container, type, prefix);
+                    } catch (e) {
+                        showToast('Failed to reorder', 'error');
+                    }
+                });
+            });
 
             // Wire folder drilling
             tableEl.querySelectorAll('.browse-folder').forEach(function(link) {

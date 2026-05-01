@@ -291,6 +291,105 @@ func (s *Server) createFolderHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // =============================================================================
+// Directory Index Handlers
+// =============================================================================
+
+// getDirectoryIndexHandler returns the _index.json for a directory
+func (s *Server) getDirectoryIndexHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	contentType := vars["type"]
+	tenant := s.getTenant(r)
+	prefix := r.URL.Query().Get("prefix")
+	state := getState(r)
+
+	index, err := s.storage.GetDirectoryIndex(r.Context(), tenant, contentType, prefix, state)
+	if err != nil {
+		// Return empty index if not found
+		writeJSON(w, http.StatusOK, storage.DirectoryIndex{Order: []string{}})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, index)
+}
+
+// putDirectoryIndexHandler creates or updates the _index.json for a directory
+func (s *Server) putDirectoryIndexHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	contentType := vars["type"]
+	tenant := s.getTenant(r)
+	prefix := r.URL.Query().Get("prefix")
+	state := getState(r)
+
+	var index storage.DirectoryIndex
+	if err := json.NewDecoder(r.Body).Decode(&index); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+
+	if err := s.storage.PutDirectoryIndex(r.Context(), tenant, contentType, prefix, state, &index); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "Directory index updated",
+		"prefix":  prefix,
+		"order":   index.Order,
+	})
+}
+
+// directoryContentsHandler returns the content of all files in a directory as a JSON array
+func (s *Server) directoryContentsHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	contentType := vars["type"]
+	dirPath := vars["id"]
+	tenant := s.getTenant(r)
+	state := getState(r)
+
+	// Strip trailing /* or just * from the directory path
+	dirPrefix := strings.TrimSuffix(dirPath, "/*")
+	if dirPrefix == "*" {
+		dirPrefix = ""
+	}
+	if dirPrefix != "" && !strings.HasSuffix(dirPrefix, "/") {
+		dirPrefix += "/"
+	}
+
+	browseResult, err := s.storage.Browse(r.Context(), tenant, contentType, dirPrefix, state)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	// Read each item's content and build the array
+	var contents []interface{}
+	for _, item := range browseResult.Items {
+		id, ext := extractIDAndExt(item.Key, contentType, state)
+		contentItem, err := s.storage.Get(r.Context(), tenant, contentType, id, ext, state)
+		if err != nil {
+			continue
+		}
+
+		// Try to parse as JSON, fall back to string
+		var parsed interface{}
+		if err := json.Unmarshal(contentItem.Content, &parsed); err != nil {
+			parsed = string(contentItem.Content)
+		}
+
+		contents = append(contents, map[string]interface{}{
+			"id":      id,
+			"content": parsed,
+		})
+	}
+
+	if contents == nil {
+		contents = []interface{}{}
+	}
+
+	writeJSON(w, http.StatusOK, contents)
+}
+
+// =============================================================================
 // Content Handlers
 // =============================================================================
 
@@ -744,6 +843,9 @@ func (s *Server) createContentHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getOrListContentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
+	contentType := vars["type"]
+	tenant := s.getTenant(r)
+	state := getState(r)
 
 	// If id is a valid state, this is a list request
 	if storage.ValidState(id) {
@@ -751,8 +853,68 @@ func (s *Server) getOrListContentHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Otherwise it's a get request
-	s.getContentHandler(w, r)
+	// If id is "*" or ends with "/*", return directory contents as array
+	if id == "*" || strings.HasSuffix(id, "/*") {
+		s.directoryContentsHandler(w, r)
+		return
+	}
+
+	// Try to get as a content item first
+	extHint := ""
+	if accept := r.Header.Get("Accept"); accept != "" {
+		extHint = getExtensionFromMime(accept)
+		if extHint == "bin" {
+			extHint = ""
+		}
+	}
+
+	stream, err := s.storage.FindContentStream(r.Context(), tenant, contentType, id, extHint, state)
+	if err == nil {
+		// Found a content item — serve it
+		defer stream.Body.Close()
+		w.Header().Set("Content-Type", stream.ContentType)
+		if stream.ETag != "" {
+			w.Header().Set("ETag", stream.ETag)
+		}
+		if stream.VersionID != "" {
+			w.Header().Set("X-Version-Id", stream.VersionID)
+		}
+		io.Copy(w, stream.Body)
+		return
+	}
+
+	// Not a file — check if it's a directory by browsing
+	prefix := id
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	browseResult, browseErr := s.storage.Browse(r.Context(), tenant, contentType, prefix, state)
+	if browseErr == nil && (len(browseResult.Folders) > 0 || len(browseResult.Items) > 0) {
+		// It's a directory — return browse result
+		responseItems := make([]map[string]interface{}, 0, len(browseResult.Items))
+		for _, item := range browseResult.Items {
+			itemID, _ := extractIDAndExt(item.Key, contentType, state)
+			ext := filepath.Ext(item.Key)
+			mimeType := mimeFromExt(ext)
+			responseItems = append(responseItems, map[string]interface{}{
+				"id":            itemID,
+				"content_type":  mimeType,
+				"last_modified": item.LastModified,
+				"size":          item.Size,
+			})
+		}
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"items":   responseItems,
+			"folders": browseResult.Folders,
+			"prefix":  id,
+			"count":   len(responseItems),
+		})
+		return
+	}
+
+	// Nothing found
+	writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("Content '%s' not found", id))
 }
 
 // getContentHandler gets content by ID

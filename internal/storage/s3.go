@@ -635,8 +635,8 @@ func (s *S3Storage) Browse(ctx context.Context, tenant string, contentType strin
 				key = *obj.Key
 			}
 
-			// Skip .keep marker files
-			if strings.HasSuffix(key, "/.keep") {
+			// Skip .keep marker files and _index.json
+			if strings.HasSuffix(key, "/.keep") || strings.HasSuffix(key, "/_index.json") || strings.HasSuffix(key, "_index.json") {
 				continue
 			}
 
@@ -662,6 +662,12 @@ func (s *S3Storage) Browse(ctx context.Context, tenant string, contentType strin
 				ETag:         etag,
 			})
 		}
+	}
+
+	// Apply ordering from _index.json if it exists
+	index, err := s.GetDirectoryIndex(ctx, tenant, contentType, prefix, state)
+	if err == nil && index != nil && len(index.Order) > 0 {
+		result.ApplyOrder(index.Order)
 	}
 
 	return result, nil
@@ -1628,6 +1634,59 @@ func (s *S3Storage) CreateFolder(ctx context.Context, tenant, contentType, folde
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create folder: %w", err)
+	}
+
+	return nil
+}
+
+// GetDirectoryIndex reads the _index.json file for a directory
+func (s *S3Storage) GetDirectoryIndex(ctx context.Context, tenant, contentType, prefix string, state State) (*DirectoryIndex, error) {
+	base := s.contentPrefix(tenant, contentType, state)
+	key := base
+	if prefix != "" {
+		key += strings.TrimSuffix(prefix, "/") + "/"
+	}
+	key += "_index.json"
+
+	result, err := s.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("directory index not found: %w", err)
+	}
+	defer result.Body.Close()
+
+	var index DirectoryIndex
+	if err := json.NewDecoder(result.Body).Decode(&index); err != nil {
+		return nil, fmt.Errorf("failed to decode directory index: %w", err)
+	}
+
+	return &index, nil
+}
+
+// PutDirectoryIndex writes the _index.json file for a directory
+func (s *S3Storage) PutDirectoryIndex(ctx context.Context, tenant, contentType, prefix string, state State, index *DirectoryIndex) error {
+	base := s.contentPrefix(tenant, contentType, state)
+	key := base
+	if prefix != "" {
+		key += strings.TrimSuffix(prefix, "/") + "/"
+	}
+	key += "_index.json"
+
+	data, err := json.Marshal(index)
+	if err != nil {
+		return fmt.Errorf("failed to encode directory index: %w", err)
+	}
+
+	_, err = s.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String("application/json"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to write directory index: %w", err)
 	}
 
 	return nil
