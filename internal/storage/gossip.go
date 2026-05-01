@@ -293,7 +293,7 @@ func (gi *GossipInvalidator) handleMessage(data []byte) {
 	gi.mu.RUnlock()
 
 	if handler != nil && len(msg.Keys) > 0 {
-		log.Debug("Cluster invalidation received (%d keys)", len(msg.Keys))
+		log.Info("Received invalidate message from peer (%d keys).", len(msg.Keys))
 		handler(msg.Keys)
 	}
 }
@@ -494,7 +494,7 @@ type gossipDelegate struct {
 }
 
 func (d *gossipDelegate) NodeMeta(limit int) []byte              { return nil }
-func (d *gossipDelegate) NotifyMsg(msg []byte)                   { d.gi.handleMessage(msg) }
+func (d *gossipDelegate) NotifyMsg(msg []byte) { d.gi.handleMessage(msg) }
 func (d *gossipDelegate) GetBroadcasts(overhead, limit int) [][]byte {
 	return d.gi.broadcasts.GetBroadcasts(overhead, limit)
 }
