@@ -99,7 +99,7 @@ func NewGossipInvalidator(cfg GossipConfig) (*GossipInvalidator, error) {
 	// Set up the delegate for receiving broadcasts
 	delegate := &gossipDelegate{gi: gi}
 	mlConfig.Delegate = delegate
-	mlConfig.Events = &gossipEvents{localName: cfg.NodeName}
+	mlConfig.Events = &gossipEvents{localName: cfg.NodeName, clusterName: detectServiceName()}
 
 	// Create the memberlist
 	list, err := memberlist.Create(mlConfig)
@@ -118,7 +118,6 @@ func NewGossipInvalidator(cfg GossipConfig) (*GossipInvalidator, error) {
 	if len(cfg.Peers) == 0 {
 		if serviceName := detectServiceName(); serviceName != "" {
 			cfg.Peers = []string{fmt.Sprintf("%s:%d", serviceName, cfg.BindPort)}
-			log.Info("Auto-detected cluster service: %s", serviceName)
 		}
 	}
 
@@ -437,12 +436,17 @@ func (b *gossipBroadcast) Finished()                                   {}
 // --- gossip events (logging only) ---
 
 type gossipEvents struct {
-	localName string
+	localName   string
+	clusterName string
 }
 
 func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
 	if node.Name == e.localName {
-		log.Info("Joined the cluster as %s.", node.Name)
+		if e.clusterName != "" {
+			log.Info("Joined the cluster '%s' as %s.", e.clusterName, node.Name)
+		} else {
+			log.Info("Joined the cluster as %s.", node.Name)
+		}
 	} else {
 		log.Info("Peer %s (%s) joined the cluster.", node.Name, node.Addr)
 	}
