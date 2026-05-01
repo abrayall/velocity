@@ -547,6 +547,7 @@ func (cs *CachedStorage) Put(ctx context.Context, tenant, contentType, id, ext s
 	if err != nil {
 		return nil, err
 	}
+	log.Info("Saved %s/%s.%s (%s)", contentType, id, ext, state)
 	cs.invalidateOnWrite(tenant, contentType, id, ext, state)
 	return item, nil
 }
@@ -556,6 +557,7 @@ func (cs *CachedStorage) PutStream(ctx context.Context, tenant, contentType, id,
 	if err != nil {
 		return nil, err
 	}
+	log.Info("Saved %s/%s.%s (%s)", contentType, id, ext, state)
 	cs.invalidateOnWrite(tenant, contentType, id, ext, state)
 	return item, nil
 }
@@ -565,6 +567,7 @@ func (cs *CachedStorage) Delete(ctx context.Context, tenant, contentType, id, ex
 	if err != nil {
 		return err
 	}
+	log.Info("Deleted %s/%s.%s (%s)", contentType, id, ext, state)
 	cs.invalidateOnWrite(tenant, contentType, id, ext, state)
 	return nil
 }
