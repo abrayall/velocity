@@ -74,13 +74,35 @@ func getExtensionFromMime(mimeType string) string {
 	return "bin"
 }
 
-// extractIDAndExt extracts the content ID and extension from a storage key
+// extractIDAndExt extracts the content ID and extension from a storage key.
+// Supports nested IDs with slashes (e.g., "parent/child" from key ".../articles/parent/child.json")
 func extractIDAndExt(key string, contentType string, state storage.State) (string, string) {
 	// Key format: {root}/tenants/{tenant}/content/{type}/{id}.{ext}
 	// or: {root}/tenants/{tenant}/content/{type}/_draft/{id}.{ext}
+	// For nested IDs: {root}/tenants/{tenant}/content/{type}/parent/child.{ext}
+
+	// Find the content type marker in the path to extract the relative path
+	var marker string
+	if state == storage.StateLive || state == "" {
+		marker = "/content/" + contentType + "/"
+	} else {
+		marker = "/content/" + contentType + "/_" + string(state) + "/"
+	}
+
+	idx := strings.Index(key, marker)
+	if idx != -1 {
+		relativePath := key[idx+len(marker):]
+		// Strip extension from the last segment
+		if dotIdx := strings.LastIndex(relativePath, "."); dotIdx != -1 {
+			return relativePath[:dotIdx], relativePath[dotIdx+1:]
+		}
+		return relativePath, ""
+	}
+
+	// Fallback: just use the filename
 	filename := filepath.Base(key)
-	if idx := strings.LastIndex(filename, "."); idx != -1 {
-		return filename[:idx], filename[idx+1:]
+	if dotIdx := strings.LastIndex(filename, "."); dotIdx != -1 {
+		return filename[:dotIdx], filename[dotIdx+1:]
 	}
 	return filename, ""
 }
@@ -223,6 +245,48 @@ func (s *Server) createContentTypeHandler(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"name":    name,
 		"message": "Content type created",
+	})
+}
+
+// createFolderHandler creates a new folder within a content type
+func (s *Server) createFolderHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	contentType := vars["type"]
+	tenant := s.getTenant(r)
+
+	var req struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "missing_name", "Folder name is required")
+		return
+	}
+
+	// Build the full folder path: prefix + name
+	prefix := r.URL.Query().Get("prefix")
+	folderPath := name
+	if prefix != "" {
+		folderPath = strings.TrimSuffix(prefix, "/") + "/" + name
+	}
+
+	state := getState(r)
+
+	if err := s.storage.CreateFolder(r.Context(), tenant, contentType, folderPath, state); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"name":    name,
+		"path":    folderPath,
+		"message": "Folder created",
 	})
 }
 
@@ -434,7 +498,46 @@ func (s *Server) bulkGetHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// listContentHandler lists all content of a type for a tenant
+// mimeFromExt returns the MIME type for a file extension (including the dot)
+func mimeFromExt(ext string) string {
+	switch ext {
+	case ".json":
+		return "application/json"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	case ".webp":
+		return "image/webp"
+	case ".html":
+		return "text/html"
+	case ".css":
+		return "text/css"
+	case ".js":
+		return "application/javascript"
+	case ".txt":
+		return "text/plain"
+	case ".md":
+		return "text/markdown"
+	case ".xml":
+		return "application/xml"
+	case ".pdf":
+		return "application/pdf"
+	case ".mp4":
+		return "video/mp4"
+	case ".mp3":
+		return "audio/mpeg"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+// listContentHandler lists all content of a type for a tenant.
+// Supports ?prefix= for folder-level browsing and ?state= for state filtering.
 func (s *Server) listContentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	contentType := vars["type"]
@@ -446,6 +549,44 @@ func (s *Server) listContentHandler(w http.ResponseWriter, r *http.Request) {
 	state := storage.StateLive
 	if stateOrID != "" && storage.ValidState(stateOrID) {
 		state = storage.State(stateOrID)
+	}
+	// Also check query param
+	if stateParam := r.URL.Query().Get("state"); stateParam != "" && storage.ValidState(stateParam) {
+		state = storage.State(stateParam)
+	}
+
+	// Check for prefix-based browsing (present even if empty = browse root level)
+	prefix := r.URL.Query().Get("prefix")
+	_, hasPrefixParam := r.URL.Query()["prefix"]
+	if hasPrefixParam {
+		browseResult, err := s.storage.Browse(r.Context(), tenant, contentType, prefix, state)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+			return
+		}
+
+		// Convert items to response format
+		responseItems := make([]map[string]interface{}, 0, len(browseResult.Items))
+		for _, item := range browseResult.Items {
+			id, _ := extractIDAndExt(item.Key, contentType, state)
+			ext := filepath.Ext(item.Key)
+			mimeType := mimeFromExt(ext)
+
+			responseItems = append(responseItems, map[string]interface{}{
+				"id":            id,
+				"content_type":  mimeType,
+				"last_modified": item.LastModified,
+				"size":          item.Size,
+			})
+		}
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"items":   responseItems,
+			"folders": browseResult.Folders,
+			"prefix":  prefix,
+			"count":   len(responseItems),
+		})
+		return
 	}
 
 	items, err := s.storage.List(r.Context(), tenant, contentType, state)
@@ -459,50 +600,12 @@ func (s *Server) listContentHandler(w http.ResponseWriter, r *http.Request) {
 		items = []*storage.ContentItem{}
 	}
 
-	// Convert to response format
+	// Convert to response format, extracting full nested IDs
 	responseItems := make([]map[string]interface{}, 0, len(items))
 	for _, item := range items {
-		// Extract ID from key
-		parts := strings.Split(item.Key, "/")
-		filename := parts[len(parts)-1]
-		id := strings.TrimSuffix(filename, filepath.Ext(filename))
-
-		ext := filepath.Ext(filename)
-		mimeType := "application/octet-stream"
-		if ext != "" {
-			switch ext {
-			case ".json":
-				mimeType = "application/json"
-			case ".png":
-				mimeType = "image/png"
-			case ".jpg", ".jpeg":
-				mimeType = "image/jpeg"
-			case ".gif":
-				mimeType = "image/gif"
-			case ".svg":
-				mimeType = "image/svg+xml"
-			case ".webp":
-				mimeType = "image/webp"
-			case ".html":
-				mimeType = "text/html"
-			case ".css":
-				mimeType = "text/css"
-			case ".js":
-				mimeType = "application/javascript"
-			case ".txt":
-				mimeType = "text/plain"
-			case ".md":
-				mimeType = "text/markdown"
-			case ".xml":
-				mimeType = "application/xml"
-			case ".pdf":
-				mimeType = "application/pdf"
-			case ".mp4":
-				mimeType = "video/mp4"
-			case ".mp3":
-				mimeType = "audio/mpeg"
-			}
-		}
+		id, _ := extractIDAndExt(item.Key, contentType, state)
+		ext := filepath.Ext(item.Key)
+		mimeType := mimeFromExt(ext)
 
 		responseItems = append(responseItems, map[string]interface{}{
 			"id":            id,

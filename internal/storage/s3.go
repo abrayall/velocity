@@ -544,8 +544,13 @@ func (s *S3Storage) List(ctx context.Context, tenant string, contentType string,
 				key = *obj.Key
 			}
 
-			// Skip state directories when listing live content
-			if state == StateLive && (strings.Contains(key, "/_draft/") || strings.Contains(key, "/_pending/")) {
+			// Skip state and system directories when listing live content
+			if state == StateLive && (strings.Contains(key, "/_draft/") || strings.Contains(key, "/_pending/") || strings.Contains(key, "/_history/") || strings.Contains(key, "/_comments/")) {
+				continue
+			}
+
+			// Skip .keep marker files
+			if strings.HasSuffix(key, "/.keep") {
 				continue
 			}
 
@@ -574,6 +579,92 @@ func (s *S3Storage) List(ctx context.Context, tenant string, contentType string,
 	}
 
 	return items, nil
+}
+
+// Browse lists content at a specific prefix level (folder-like browsing)
+// Returns both folders (subdirectories) and items at the given prefix level
+func (s *S3Storage) Browse(ctx context.Context, tenant string, contentType string, prefix string, state State) (*BrowseResult, error) {
+	if state == "" {
+		state = StateLive
+	}
+
+	s3Prefix := s.contentPrefix(tenant, contentType, state)
+	if prefix != "" {
+		s3Prefix += prefix
+		if !strings.HasSuffix(s3Prefix, "/") {
+			s3Prefix += "/"
+		}
+	}
+
+	input := &s3.ListObjectsV2Input{
+		Bucket:    aws.String(s.bucket),
+		Prefix:    aws.String(s3Prefix),
+		Delimiter: aws.String("/"),
+	}
+
+	result := &BrowseResult{
+		Folders: []string{},
+		Items:   []*ContentItem{},
+	}
+
+	paginator := s3.NewListObjectsV2Paginator(s.s3Client, input)
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to browse content: %w", err)
+		}
+
+		// Collect folders from CommonPrefixes
+		for _, cp := range page.CommonPrefixes {
+			if cp.Prefix == nil {
+				continue
+			}
+			folder := strings.TrimPrefix(*cp.Prefix, s3Prefix)
+			folder = strings.TrimSuffix(folder, "/")
+			// Skip system directories
+			if folder != "" && !strings.HasPrefix(folder, "_") {
+				result.Folders = append(result.Folders, folder)
+			}
+		}
+
+		// Collect items from Contents
+		for _, obj := range page.Contents {
+			key := ""
+			if obj.Key != nil {
+				key = *obj.Key
+			}
+
+			// Skip .keep marker files
+			if strings.HasSuffix(key, "/.keep") {
+				continue
+			}
+
+			var lastMod time.Time
+			if obj.LastModified != nil {
+				lastMod = *obj.LastModified
+			}
+
+			var size int64
+			if obj.Size != nil {
+				size = *obj.Size
+			}
+
+			etag := ""
+			if obj.ETag != nil {
+				etag = *obj.ETag
+			}
+
+			result.Items = append(result.Items, &ContentItem{
+				Key:          key,
+				LastModified: lastMod,
+				Size:         size,
+				ETag:         etag,
+			})
+		}
+	}
+
+	return result, nil
 }
 
 // ListVersions returns all versions of a specific live content item (only live content is versioned)
@@ -1519,6 +1610,24 @@ func (s *S3Storage) CreateContentType(ctx context.Context, tenant, contentType s
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create content type: %w", err)
+	}
+
+	return nil
+}
+
+// CreateFolder creates a folder marker (.keep) at the specified path within a content type
+func (s *S3Storage) CreateFolder(ctx context.Context, tenant, contentType, folderPath string, state State) error {
+	prefix := s.contentPrefix(tenant, contentType, state)
+	key := prefix + strings.TrimSuffix(folderPath, "/") + "/.keep"
+
+	_, err := s.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader([]byte{}),
+		ContentType: aws.String("application/x-empty"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create folder: %w", err)
 	}
 
 	return nil

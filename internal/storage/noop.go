@@ -57,6 +57,10 @@ func (s *NoopStorage) List(ctx context.Context, tenant, contentType string, stat
 	return nil, ErrStorageNotConfigured
 }
 
+func (s *NoopStorage) Browse(ctx context.Context, tenant, contentType, prefix string, state State) (*BrowseResult, error) {
+	return nil, ErrStorageNotConfigured
+}
+
 func (s *NoopStorage) Exists(ctx context.Context, tenant, contentType, id, ext string, state State) (bool, error) {
 	return false, ErrStorageNotConfigured
 }
@@ -206,6 +210,12 @@ func (s *NoopStorage) CreateTenant(ctx context.Context, tenant string) error {
 }
 
 func (s *NoopStorage) CreateContentType(ctx context.Context, tenant, contentType string) error {
+	return ErrStorageNotConfigured
+}
+
+// Folders - returns ErrStorageNotConfigured
+
+func (s *NoopStorage) CreateFolder(ctx context.Context, tenant, contentType, folderPath string, state State) error {
 	return ErrStorageNotConfigured
 }
 

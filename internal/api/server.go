@@ -52,7 +52,8 @@ func (s *Server) setupRoutes() {
 	//   - Read-only (GET only)
 	//   - Public (no authentication required)
 	//   - Used for embeddable URLs (images, CSS, etc.)
-	s.router.HandleFunc("/content/{tenant}/{type}/{id}", s.directContentHandler).Methods("GET")
+	// {id:.+} allows nested IDs with slashes (e.g., /content/demo/images/hero/banner)
+	s.router.HandleFunc("/content/{tenant}/{type}/{id:.+}", s.directContentHandler).Methods("GET")
 
 	api := s.router.PathPrefix("/api").Subrouter()
 
@@ -82,81 +83,55 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/tenants", s.createTenantHandler).Methods("POST")
 
 	// Content routes
-	// GET    /api/content/{type}                 - List all live items
-	// GET    /api/content/{type}/draft           - List all draft items
-	// GET    /api/content/{type}/pending         - List all pending items
-	// POST   /api/content/{type}/{id}            - Create new item
-	// GET    /api/content/{type}/{id}            - Get live item
-	// GET    /api/content/{type}/{id}/draft      - Get draft item
-	// GET    /api/content/{type}/{id}/pending    - Get pending item
-	// PUT    /api/content/{type}/{id}            - Update live item
-	// PUT    /api/content/{type}/{id}/{state}    - Update item in state
-	// DELETE /api/content/{type}/{id}            - Delete live item
-	// DELETE /api/content/{type}/{id}/{state}    - Delete item in state
+	// IDs can contain slashes for nested/hierarchical content (e.g., "parent/child")
+	// {id:.+} matches one or more path segments including slashes
+	// {state:draft|pending|live} explicitly matches only valid state names
+	//
+	// ROUTE REGISTRATION ORDER MATTERS (gorilla mux matches in registration order):
+	// 1. Bulk get (no {id})
+	// 2. List by type (no {id})
+	// 3. Literal suffix routes ({id:.+}/transition, /versions, /history, /diff, /metadata)
+	// 4. State-specific routes with literal suffixes ({state}/metadata, {state}/comments)
+	// 5. State-specific content routes ({state} only)
+	// 6. Catch-all content routes ({id:.+} only) — MUST BE LAST
 
 	// Bulk get
 	// POST   /api/content                        - Bulk get multiple items
 	api.HandleFunc("/content", s.bulkGetHandler).Methods("POST")
 
+	// List by type
+	// GET    /api/content/{type}                 - List all live items (or browse with ?prefix=)
 	api.HandleFunc("/content/{type}", s.listContentHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}", s.getOrListContentHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}", s.createContentHandler).Methods("POST")
-	api.HandleFunc("/content/{type}/{id}", s.updateContentHandler).Methods("PUT")
-	api.HandleFunc("/content/{type}/{id}", s.deleteContentHandler).Methods("DELETE")
 
-	// IMPORTANT: Routes with literal path segments (like /metadata, /transition, /versions, /history)
-	// MUST be registered BEFORE routes with variable segments (like /{state}) because gorilla mux
-	// matches routes in registration order, not by specificity.
+	// Create folder
+	// POST   /api/content/{type}/_mkdir          - Create a folder within a content type
+	api.HandleFunc("/content/{type}/_mkdir", s.createFolderHandler).Methods("POST")
 
-	// State transition route
-	// POST   /api/content/{type}/{id}/transition - Move content between states (draft->pending->live)
-	api.HandleFunc("/content/{type}/{id}/transition", s.transitionHandler).Methods("POST")
+	// Literal suffix routes (registered FIRST so they match before catch-all)
+	// POST   /api/content/{type}/{id}/transition - Move content between states
+	api.HandleFunc("/content/{type}/{id:.+}/transition", s.transitionHandler).Methods("POST")
 
 	// Version routes
-	// GET    /api/content/{type}/{id}/versions           - List all versions
-	// GET    /api/content/{type}/{id}/versions/{version} - Get specific version
-	// POST   /api/content/{type}/{id}/versions/{version}/restore - Restore version
-
-	api.HandleFunc("/content/{type}/{id}/versions", s.listVersionsHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}/versions/{version}", s.getVersionHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}/versions/{version}/restore", s.restoreVersionHandler).Methods("POST")
+	api.HandleFunc("/content/{type}/{id:.+}/versions", s.listVersionsHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}/versions/{version}", s.getVersionHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}/versions/{version}/restore", s.restoreVersionHandler).Methods("POST")
 
 	// History routes
-	// GET    /api/content/{type}/{id}/history           - List history records
-	// GET    /api/content/{type}/{id}/history/{version} - Get specific history record
-	// GET    /api/content/{type}/{id}/diff?from=v1&to=v2 - Compute diff between versions
-
-	api.HandleFunc("/content/{type}/{id}/history", s.listHistoryHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}/history/{version}", s.getHistoryHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}/diff", s.diffHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}/history", s.listHistoryHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}/history/{version}", s.getHistoryHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}/diff", s.diffHandler).Methods("GET")
 
 	// Metadata routes (live content)
-	// GET    /api/content/{type}/{id}/metadata    - Get metadata only
-	// PUT    /api/content/{type}/{id}/metadata    - Replace all metadata
-	// PATCH  /api/content/{type}/{id}/metadata    - Merge/update metadata
-	// DELETE /api/content/{type}/{id}/metadata    - Remove specific keys
+	api.HandleFunc("/content/{type}/{id:.+}/metadata", s.getMetadataHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}/metadata", s.setMetadataHandler).Methods("PUT")
+	api.HandleFunc("/content/{type}/{id:.+}/metadata", s.updateMetadataHandler).Methods("PATCH")
+	api.HandleFunc("/content/{type}/{id:.+}/metadata", s.deleteMetadataHandler).Methods("DELETE")
 
-	api.HandleFunc("/content/{type}/{id}/metadata", s.getMetadataHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}/metadata", s.setMetadataHandler).Methods("PUT")
-	api.HandleFunc("/content/{type}/{id}/metadata", s.updateMetadataHandler).Methods("PATCH")
-	api.HandleFunc("/content/{type}/{id}/metadata", s.deleteMetadataHandler).Methods("DELETE")
-
-	// State-specific metadata routes
-	// GET    /api/content/{type}/{id}/{state}/metadata    - Get metadata for state
-	// PUT    /api/content/{type}/{id}/{state}/metadata    - Replace metadata for state
-	// PATCH  /api/content/{type}/{id}/{state}/metadata    - Merge metadata for state
-	// DELETE /api/content/{type}/{id}/{state}/metadata    - Remove metadata keys for state
-
-	api.HandleFunc("/content/{type}/{id}/{state}/metadata", s.getMetadataHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}/{state}/metadata", s.setMetadataHandler).Methods("PUT")
-	api.HandleFunc("/content/{type}/{id}/{state}/metadata", s.updateMetadataHandler).Methods("PATCH")
-	api.HandleFunc("/content/{type}/{id}/{state}/metadata", s.deleteMetadataHandler).Methods("DELETE")
-
-	// State-specific content routes (MUST be after literal routes like /metadata, /versions, etc.)
-	api.HandleFunc("/content/{type}/{id}/{state}", s.getContentHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}/{state}", s.createContentHandler).Methods("POST")
-	api.HandleFunc("/content/{type}/{id}/{state}", s.updateContentHandler).Methods("PUT")
-	api.HandleFunc("/content/{type}/{id}/{state}", s.deleteContentHandler).Methods("DELETE")
+	// State-specific metadata routes (explicit state names)
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}/metadata", s.getMetadataHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}/metadata", s.setMetadataHandler).Methods("PUT")
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}/metadata", s.updateMetadataHandler).Methods("PATCH")
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}/metadata", s.deleteMetadataHandler).Methods("DELETE")
 
 	// Schema routes (global schemas)
 	// GET    /api/schemas              - List global schemas
@@ -180,18 +155,24 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/tenant/schemas/{name}", s.putTenantSchemaHandler).Methods("PUT")
 	api.HandleFunc("/tenant/schemas/{name}", s.deleteTenantSchemaHandler).Methods("DELETE")
 
-	// Comment routes (only on draft/pending content)
-	// GET    /api/content/{type}/{id}/{state}/comments              - List comments
-	// POST   /api/content/{type}/{id}/{state}/comments              - Create comment
-	// GET    /api/content/{type}/{id}/{state}/comments/{comment_id} - Get comment
-	// PUT    /api/content/{type}/{id}/{state}/comments/{comment_id} - Update/resolve comment
-	// DELETE /api/content/{type}/{id}/{state}/comments/{comment_id} - Delete comment
+	// State-specific comment routes (explicit state names + literal /comments suffix)
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}/comments", s.listCommentsHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}/comments", s.createCommentHandler).Methods("POST")
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}/comments/{comment_id}", s.getCommentHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}/comments/{comment_id}", s.updateCommentHandler).Methods("PUT")
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}/comments/{comment_id}", s.deleteCommentHandler).Methods("DELETE")
 
-	api.HandleFunc("/content/{type}/{id}/{state}/comments", s.listCommentsHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}/{state}/comments", s.createCommentHandler).Methods("POST")
-	api.HandleFunc("/content/{type}/{id}/{state}/comments/{comment_id}", s.getCommentHandler).Methods("GET")
-	api.HandleFunc("/content/{type}/{id}/{state}/comments/{comment_id}", s.updateCommentHandler).Methods("PUT")
-	api.HandleFunc("/content/{type}/{id}/{state}/comments/{comment_id}", s.deleteCommentHandler).Methods("DELETE")
+	// State-specific content routes (explicit state names, after all literal suffix routes)
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}", s.getContentHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}", s.createContentHandler).Methods("POST")
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}", s.updateContentHandler).Methods("PUT")
+	api.HandleFunc("/content/{type}/{id:.+}/{state:draft|pending|live}", s.deleteContentHandler).Methods("DELETE")
+
+	// Catch-all content routes (MUST BE LAST — {id:.+} matches anything)
+	api.HandleFunc("/content/{type}/{id:.+}", s.getOrListContentHandler).Methods("GET")
+	api.HandleFunc("/content/{type}/{id:.+}", s.createContentHandler).Methods("POST")
+	api.HandleFunc("/content/{type}/{id:.+}", s.updateContentHandler).Methods("PUT")
+	api.HandleFunc("/content/{type}/{id:.+}", s.deleteContentHandler).Methods("DELETE")
 
 	// Webhook routes
 	// GET    /api/webhooks              - List webhooks for tenant

@@ -110,6 +110,12 @@ type WebhookEvent struct {
 	Timestamp   string `json:"timestamp"`
 }
 
+// BrowseResult contains folders and items at a given prefix level
+type BrowseResult struct {
+	Folders []string       `json:"folders"`
+	Items   []*ContentItem `json:"items"`
+}
+
 // Storage defines the interface for content storage backends.
 // Implementations must be safe for concurrent use.
 type Storage interface {
@@ -124,6 +130,7 @@ type Storage interface {
 	FindContentStream(ctx context.Context, tenant, contentType, id, extHint string, state State) (*ContentStream, error)
 	Delete(ctx context.Context, tenant, contentType, id, ext string, state State) error
 	List(ctx context.Context, tenant, contentType string, state State) ([]*ContentItem, error)
+	Browse(ctx context.Context, tenant, contentType, prefix string, state State) (*BrowseResult, error)
 	Exists(ctx context.Context, tenant, contentType, id, ext string, state State) (bool, error)
 	Transition(ctx context.Context, tenant, contentType, id, ext string, fromState, toState State) (*ContentItem, error)
 
@@ -177,6 +184,9 @@ type Storage interface {
 	GetSession(ctx context.Context, token string) (time.Time, error)
 	DeleteSession(ctx context.Context, token string) error
 	DeleteExpiredSessions(ctx context.Context) (int, error)
+
+	// Folders
+	CreateFolder(ctx context.Context, tenant, contentType, folderPath string, state State) error
 
 	// Metadata
 	GetMetadata(ctx context.Context, tenant, contentType, id, ext string, state State) (map[string]string, error)

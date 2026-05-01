@@ -103,6 +103,10 @@ var Admin = (function() {
         renderSidebar();
     }
 
+    function titleCase(str) {
+        return str.replace(/[-_]/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+    }
+
     function renderSidebar() {
         var nav = document.getElementById('sidebarNav');
         var html = '';
@@ -110,15 +114,14 @@ var Admin = (function() {
         if (contentTypes.length > 0) {
             contentTypes.forEach(function(type) {
                 html += '<a class="sidebar-link" href="#/content/' + type + '">' +
-                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>' +
-                    escapeHtml(type) + '</a>';
+                    escapeHtml(titleCase(type)) + '</a>';
             });
         } else {
             html += '<div class="sidebar-link text-muted" style="font-size:0.8rem;cursor:default;">No content types</div>';
         }
 
         html += '<a class="sidebar-link add-type-link" id="addTypeBtn" href="javascript:void(0)">' +
-            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>' +
+            '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>' +
             'Add Type</a>';
 
         nav.innerHTML = html;
@@ -179,13 +182,16 @@ var Admin = (function() {
             }
             view.innerHTML = '<h1 class="view-title">No Content</h1><p class="text-muted">No content types found for this tenant.</p>';
         } else if (hash.match(/^#\/content\/([^/]+)\/new$/)) {
+            // Create new item at root level
             var type = hash.match(/^#\/content\/([^/]+)\/new$/)[1];
             renderNewItem(view, type);
-        } else if (hash.match(/^#\/content\/([^/]+)\/([^/]+)\/history$/)) {
-            var m = hash.match(/^#\/content\/([^/]+)\/([^/]+)\/history$/);
+        } else if (hash.match(/^#\/content\/([^/]+)\/(.+)\/history$/)) {
+            // Edit item with history — (.+) matches nested IDs with slashes
+            var m = hash.match(/^#\/content\/([^/]+)\/(.+)\/history$/);
             renderEditItem(view, m[1], m[2], { showHistory: true });
-        } else if (hash.match(/^#\/content\/([^/]+)\/([^/]+)$/)) {
-            var m = hash.match(/^#\/content\/([^/]+)\/([^/]+)$/);
+        } else if (hash.match(/^#\/content\/([^/]+)\/(.+)$/)) {
+            // Edit item — (.+) matches nested IDs with slashes
+            var m = hash.match(/^#\/content\/([^/]+)\/(.+)$/);
             renderEditItem(view, m[1], m[2]);
         } else if (hash.match(/^#\/content\/([^/]+)$/)) {
             var type = hash.match(/^#\/content\/([^/]+)$/)[1];
@@ -294,58 +300,148 @@ var Admin = (function() {
         }
     }
 
-    // Content List
-    async function renderContentList(container, type) {
-        container.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">' +
-            '<div><h1 class="view-title">' + escapeHtml(type) + '</h1>' +
+    // Content List — uses browse mode with folder navigation and breadcrumbs
+    async function renderContentList(container, type, prefix) {
+        // Build breadcrumb trail
+        var breadcrumbHtml = '<div class="breadcrumb" style="margin-bottom:12px;">';
+        if (prefix) {
+            breadcrumbHtml += '<a href="javascript:void(0)" class="browse-root">' + escapeHtml(type) + '</a>';
+            var segments = prefix.replace(/\/$/, '').split('/');
+            var accumulated = '';
+            segments.forEach(function(seg, i) {
+                accumulated += (accumulated ? '/' : '') + seg;
+                breadcrumbHtml += '<span class="separator">/</span>';
+                if (i < segments.length - 1) {
+                    breadcrumbHtml += '<a href="javascript:void(0)" class="browse-prefix" data-prefix="' + escapeAttr(accumulated) + '">' + escapeHtml(seg) + '</a>';
+                } else {
+                    breadcrumbHtml += '<span class="current">' + escapeHtml(seg) + '</span>';
+                }
+            });
+        } else {
+            breadcrumbHtml += '<span class="current">' + escapeHtml(type) + '</span>';
+        }
+        breadcrumbHtml += '</div>';
+
+        var title = prefix ? prefix.replace(/\/$/, '').split('/').pop() : type;
+        var displayTitle = titleCase(title);
+
+        container.innerHTML = breadcrumbHtml +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">' +
+            '<div><h1 class="view-title">' + escapeHtml(displayTitle) + '</h1>' +
             '<p class="view-subtitle">Manage content items</p></div>' +
-            '<a href="#/content/' + type + '/new" class="btn btn-primary btn-sm">+ New Item</a></div>' +
+            '<div style="display:flex;gap:8px;">' +
+            '<a href="#/content/' + type + '/new" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><circle cx="12" cy="12" r="10" fill="white" stroke="white" stroke-width="2"></circle><line x1="12" y1="8" x2="12" y2="16" stroke="#FF5F1F" stroke-width="2"></line><line x1="8" y1="12" x2="16" y2="12" stroke="#FF5F1F" stroke-width="2"></line></svg>New Item</a>' +
+            '<button class="btn btn-ghost btn-sm" id="newFolderBtn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>New Folder</button></div></div>' +
             '<div class="table-container"><div class="loading">Loading...</div></div>';
 
+        // Wire new folder button
+        document.getElementById('newFolderBtn').addEventListener('click', function() {
+            showCreateDialog('Create Folder', 'Folder name', async function(name) {
+                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/_mkdir?prefix=' + encodeURIComponent(prefix || ''), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Tenant': currentTenant
+                    },
+                    body: JSON.stringify({ name: name })
+                });
+                if (!resp.ok) {
+                    var err = await resp.json();
+                    throw new Error(err.message || 'Failed to create folder');
+                }
+                showToast('Folder created', 'success');
+                renderContentList(container, type, prefix);
+            });
+        });
+
+        // Wire breadcrumb navigation
+        if (prefix) {
+            var rootLink = container.querySelector('.browse-root');
+            if (rootLink) {
+                rootLink.addEventListener('click', function() {
+                    renderContentList(container, type);
+                });
+            }
+            container.querySelectorAll('.browse-prefix').forEach(function(link) {
+                link.addEventListener('click', function() {
+                    renderContentList(container, type, this.dataset.prefix);
+                });
+            });
+        }
+
         try {
-            var resp = await fetch('/api/content/' + encodeURIComponent(type), {
+            // Always use browse mode to get folders + items at current level
+            var url = '/api/content/' + encodeURIComponent(type) + '?prefix=' + encodeURIComponent(prefix || '');
+            var resp = await fetch(url, {
                 headers: { 'X-Tenant': currentTenant }
             });
             var data = await resp.json();
             var items = data.items || [];
+            var folders = data.folders || [];
 
             var tableEl = container.querySelector('.table-container');
 
-            if (items.length === 0) {
+            if (items.length === 0 && folders.length === 0) {
                 tableEl.innerHTML = '<div class="table-empty">No content items found. <a href="#/content/' + type + '/new" class="table-link">Create one</a>.</div>';
                 return;
             }
 
             var html = '<table><thead><tr>' +
-                '<th>ID</th><th>Type</th><th>Last Modified</th><th>Size</th><th class="col-actions">Actions</th>' +
+                '<th>Name</th><th>Type</th><th>Last Modified</th><th>Size</th><th class="col-actions">Actions</th>' +
                 '</tr></thead><tbody>';
 
+            // Show folders first (as directory rows)
+            folders.forEach(function(folder) {
+                var folderPath = prefix ? prefix.replace(/\/$/, '') + '/' + folder : folder;
+                html += '<tr class="folder-row">' +
+                    '<td><a href="javascript:void(0)" class="table-link browse-folder" data-prefix="' + escapeAttr(folderPath) + '">' +
+                        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>' +
+                        escapeHtml(folder) + '</a></td>' +
+                    '<td class="text-muted text-sm">directory</td>' +
+                    '<td class="text-muted text-sm">-</td>' +
+                    '<td class="text-muted text-sm">-</td>' +
+                    '<td class="col-actions"></td></tr>';
+            });
+
+            // Show items — display only the filename (last segment), not the full path
             items.forEach(function(item) {
                 var modified = item.last_modified ? new Date(item.last_modified).toLocaleDateString() : '-';
                 var size = formatSize(item.size || 0);
                 var ct = item.content_type || '-';
+                var itemHash = '#/content/' + type + '/' + item.id;
+                // Show just the item name (last path segment)
+                var displayName = item.id.split('/').pop();
                 html += '<tr>' +
-                    '<td><a class="table-link" href="#/content/' + type + '/' + encodeURIComponent(item.id) + '">' + escapeHtml(item.id) + '</a></td>' +
+                    '<td><a class="table-link" href="' + itemHash + '">' +
+                        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>' +
+                        escapeHtml(displayName) + '</a></td>' +
                     '<td class="text-muted text-sm">' + escapeHtml(ct) + '</td>' +
                     '<td class="text-muted text-sm">' + modified + '</td>' +
                     '<td class="text-muted text-sm">' + size + '</td>' +
                     '<td class="col-actions"><div class="table-actions">' +
-                        '<a href="#/content/' + type + '/' + encodeURIComponent(item.id) + '" class="action-link">Edit</a>' +
+                        '<a href="' + itemHash + '" class="action-link">Edit</a>' +
                         '<span class="action-sep">|</span>' +
                         '<button class="action-link danger delete-item-btn" data-id="' + escapeAttr(item.id) + '">Delete</button>' +
                         '<span class="action-sep">|</span>' +
-                        '<a href="#/content/' + type + '/' + encodeURIComponent(item.id) + '/history" class="action-link">History</a>' +
+                        '<a href="' + itemHash + '/history" class="action-link">History</a>' +
                     '</div></td></tr>';
             });
 
             html += '</tbody></table>';
             tableEl.innerHTML = html;
 
+            // Wire folder drilling
+            tableEl.querySelectorAll('.browse-folder').forEach(function(link) {
+                link.addEventListener('click', function() {
+                    renderContentList(container, type, this.dataset.prefix);
+                });
+            });
+
             // Wire delete buttons
             tableEl.querySelectorAll('.delete-item-btn').forEach(function(btn) {
                 btn.addEventListener('click', function() {
                     confirmDelete(type, this.dataset.id, function() {
-                        renderContentList(container, type);
+                        renderContentList(container, type, prefix);
                     });
                 });
             });
@@ -364,7 +460,8 @@ var Admin = (function() {
             '<p class="view-subtitle">Add a new content item to ' + escapeHtml(type) + '</p>' +
             '<div class="form-group" style="max-width:400px;margin-bottom:16px;">' +
                 '<label for="newItemId">Item ID</label>' +
-                '<input type="text" id="newItemId" placeholder="my-item-id">' +
+                '<input type="text" id="newItemId" placeholder="my-item-id or folder/my-item-id">' +
+                '<span class="text-muted text-sm" style="display:block;margin-top:4px;">Use slashes for nested paths (e.g., images/hero/banner)</span>' +
             '</div>' +
             '<div id="editorMount"></div>';
 
@@ -376,7 +473,8 @@ var Admin = (function() {
             }
 
             try {
-                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id), {
+                // Use the ID directly in the URL path (slashes create nested hierarchy)
+                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + id, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -398,12 +496,19 @@ var Admin = (function() {
         });
     }
 
-    // Edit Item
+    // Edit Item — id can contain slashes for nested content
     async function renderEditItem(container, type, id, opts) {
-        container.innerHTML = '<div class="breadcrumb">' +
-            '<a href="#/content/' + type + '">' + escapeHtml(type) + '</a>' +
-            '<span class="separator">/</span>' +
-            '<span class="current">' + escapeHtml(id) + '</span></div>' +
+        // Build breadcrumb with folder segments
+        var breadcrumbHtml = '<div class="breadcrumb">' +
+            '<a href="#/content/' + type + '">' + escapeHtml(type) + '</a>';
+        var idParts = id.split('/');
+        idParts.forEach(function(part, i) {
+            breadcrumbHtml += '<span class="separator">/</span>';
+            breadcrumbHtml += '<span class="current">' + escapeHtml(part) + '</span>';
+        });
+        breadcrumbHtml += '</div>';
+
+        container.innerHTML = breadcrumbHtml +
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;margin-bottom:16px;">' +
             '<h1 class="view-title">' + escapeHtml(id) + '</h1>' +
             '<button class="history-toggle" id="historyToggle">' +
@@ -449,7 +554,7 @@ var Admin = (function() {
             panel.innerHTML = '<div class="history-panel"><div class="loading" style="padding:16px;">Loading versions...</div></div>';
 
             try {
-                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id) + '/versions', {
+                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + id + '/versions', {
                     headers: { 'X-Tenant': currentTenant }
                 });
 
@@ -527,7 +632,7 @@ var Admin = (function() {
             var preview = document.getElementById('versionPreview');
 
             try {
-                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id) + '/versions/' + encodeURIComponent(versionId), {
+                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + id + '/versions/' + encodeURIComponent(versionId), {
                     headers: {
                         'Accept': 'application/json',
                         'X-Tenant': currentTenant
@@ -564,7 +669,7 @@ var Admin = (function() {
 
         async function restoreVersion(versionId) {
             try {
-                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id) + '/versions/' + encodeURIComponent(versionId) + '/restore', {
+                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + id + '/versions/' + encodeURIComponent(versionId) + '/restore', {
                     method: 'POST',
                     headers: { 'X-Tenant': currentTenant }
                 });
@@ -593,7 +698,7 @@ var Admin = (function() {
             mount.innerHTML = '<div class="loading">Loading...</div>';
 
             try {
-                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id), {
+                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + id, {
                     headers: {
                         'Accept': 'application/json',
                         'X-Tenant': currentTenant
@@ -638,7 +743,7 @@ var Admin = (function() {
 
                 Editor.render(mount, data, async function(updated) {
                     try {
-                        var saveResp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id), {
+                        var saveResp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + id, {
                             method: 'PUT',
                             headers: {
                                 'Content-Type': 'application/json',
@@ -690,7 +795,7 @@ var Admin = (function() {
 
         overlay.querySelector('#confirmDelete').addEventListener('click', async function() {
             try {
-                await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id), {
+                await fetch('/api/content/' + encodeURIComponent(type) + '/' + id, {
                     method: 'DELETE',
                     headers: { 'X-Tenant': currentTenant }
                 });
