@@ -152,6 +152,80 @@ func (s *Server) listTenantsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// createTenantHandler creates a new tenant
+func (s *Server) createTenantHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "missing_name", "Tenant name is required")
+		return
+	}
+
+	// Validate name: alphanumeric and hyphens only
+	for _, c := range name {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+			writeError(w, http.StatusBadRequest, "invalid_name", "Tenant name must contain only letters, numbers, and hyphens")
+			return
+		}
+	}
+
+	if err := s.storage.CreateTenant(r.Context(), name); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"name":    name,
+		"message": "Tenant created",
+	})
+}
+
+// createContentTypeHandler creates a new content type for a tenant
+func (s *Server) createContentTypeHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "missing_name", "Content type name is required")
+		return
+	}
+
+	// Validate name: alphanumeric and hyphens only
+	for _, c := range name {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+			writeError(w, http.StatusBadRequest, "invalid_name", "Content type name must contain only letters, numbers, and hyphens")
+			return
+		}
+	}
+
+	tenant := s.getTenant(r)
+
+	if err := s.storage.CreateContentType(r.Context(), tenant, name); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"name":    name,
+		"message": "Content type created",
+	})
+}
+
 // =============================================================================
 // Content Handlers
 // =============================================================================

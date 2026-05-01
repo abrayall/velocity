@@ -169,6 +169,14 @@ type Storage interface {
 	// Tenants
 	ListTenants(ctx context.Context) ([]string, error)
 	ListContentTypes(ctx context.Context, tenant string) ([]string, error)
+	CreateTenant(ctx context.Context, tenant string) error
+	CreateContentType(ctx context.Context, tenant, contentType string) error
+
+	// Sessions
+	PutSession(ctx context.Context, token string, expiresAt time.Time) error
+	GetSession(ctx context.Context, token string) (time.Time, error)
+	DeleteSession(ctx context.Context, token string) error
+	DeleteExpiredSessions(ctx context.Context) (int, error)
 
 	// Metadata
 	GetMetadata(ctx context.Context, tenant, contentType, id, ext string, state State) (map[string]string, error)

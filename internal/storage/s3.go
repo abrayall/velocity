@@ -1359,6 +1359,172 @@ func (s *S3Storage) ListContentTypes(ctx context.Context, tenant string) ([]stri
 }
 
 // =============================================================================
+// Session Operations
+// =============================================================================
+
+// sessionKey constructs the S3 key for a session
+func (s *S3Storage) sessionKey(token string) string {
+	return path.Join(s.root, "sessions", token+".json")
+}
+
+// sessionsPrefix returns the prefix for listing sessions
+func (s *S3Storage) sessionsPrefix() string {
+	return path.Join(s.root, "sessions") + "/"
+}
+
+// PutSession stores a session in S3
+func (s *S3Storage) PutSession(ctx context.Context, token string, expiresAt time.Time) error {
+	key := s.sessionKey(token)
+
+	data, err := json.Marshal(map[string]string{
+		"token":      token,
+		"expires_at": expiresAt.UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal session: %w", err)
+	}
+
+	_, err = s.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String("application/json"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to put session: %w", err)
+	}
+
+	return nil
+}
+
+// GetSession retrieves a session from S3 and returns its expiry time
+func (s *S3Storage) GetSession(ctx context.Context, token string) (time.Time, error) {
+	key := s.sessionKey(token)
+
+	item, err := s.getByKey(ctx, key, "")
+	if err != nil {
+		return time.Time{}, fmt.Errorf("session not found: %w", err)
+	}
+
+	var data struct {
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(item.Content, &data); err != nil {
+		return time.Time{}, fmt.Errorf("failed to parse session: %w", err)
+	}
+
+	expiresAt, err := time.Parse(time.RFC3339, data.ExpiresAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to parse expiry: %w", err)
+	}
+
+	return expiresAt, nil
+}
+
+// DeleteSession removes a session from S3
+func (s *S3Storage) DeleteSession(ctx context.Context, token string) error {
+	key := s.sessionKey(token)
+
+	_, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete session: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteExpiredSessions lists all sessions and deletes expired ones, returns count deleted
+func (s *S3Storage) DeleteExpiredSessions(ctx context.Context) (int, error) {
+	prefix := s.sessionsPrefix()
+
+	input := &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(prefix),
+	}
+
+	deleted := 0
+	now := time.Now()
+	paginator := s3.NewListObjectsV2Paginator(s.s3Client, input)
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return deleted, fmt.Errorf("failed to list sessions: %w", err)
+		}
+
+		for _, obj := range page.Contents {
+			if obj.Key == nil {
+				continue
+			}
+
+			item, err := s.getByKey(ctx, *obj.Key, "")
+			if err != nil {
+				continue
+			}
+
+			var data struct {
+				ExpiresAt string `json:"expires_at"`
+			}
+			if err := json.Unmarshal(item.Content, &data); err != nil {
+				continue
+			}
+
+			expiresAt, err := time.Parse(time.RFC3339, data.ExpiresAt)
+			if err != nil {
+				continue
+			}
+
+			if now.After(expiresAt) {
+				_, _ = s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+					Bucket: aws.String(s.bucket),
+					Key:    obj.Key,
+				})
+				deleted++
+			}
+		}
+	}
+
+	return deleted, nil
+}
+
+// CreateTenant creates a new tenant by putting a .keep marker object
+func (s *S3Storage) CreateTenant(ctx context.Context, tenant string) error {
+	key := path.Join(s.root, "tenants", tenant, ".keep")
+
+	_, err := s.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader([]byte{}),
+		ContentType: aws.String("application/x-empty"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create tenant: %w", err)
+	}
+
+	return nil
+}
+
+// CreateContentType creates a new content type directory for a tenant by putting a .keep marker object
+func (s *S3Storage) CreateContentType(ctx context.Context, tenant, contentType string) error {
+	key := path.Join(s.root, "tenants", tenant, "content", contentType, ".keep")
+
+	_, err := s.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader([]byte{}),
+		ContentType: aws.String("application/x-empty"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create content type: %w", err)
+	}
+
+	return nil
+}
+
+// =============================================================================
 // Metadata Operations
 // =============================================================================
 

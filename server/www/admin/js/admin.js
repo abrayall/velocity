@@ -63,6 +63,31 @@ var Admin = (function() {
             await loadContentTypes();
             window.location.hash = '#/';
         });
+
+        // Add tenant button
+        var addBtn = document.getElementById('addTenantBtn');
+        if (addBtn) {
+            addBtn.addEventListener('click', function() {
+                showCreateDialog('Create Tenant', 'Tenant name', async function(name) {
+                    var resp = await fetch('/api/tenants', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: name })
+                    });
+                    if (!resp.ok) {
+                        var err = await resp.json();
+                        throw new Error(err.message || 'Failed to create tenant');
+                    }
+                    showToast('Tenant created', 'success');
+                    await loadTenants();
+                    select.value = name;
+                    currentTenant = name;
+                    localStorage.setItem('velocity_tenant', currentTenant);
+                    await loadContentTypes();
+                    route();
+                });
+            });
+        }
     }
 
     async function loadContentTypes() {
@@ -92,8 +117,32 @@ var Admin = (function() {
             html += '<div class="sidebar-link text-muted" style="font-size:0.8rem;cursor:default;">No content types</div>';
         }
 
+        html += '<a class="sidebar-link add-type-link" id="addTypeBtn" href="javascript:void(0)">' +
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>' +
+            'Add Type</a>';
+
         nav.innerHTML = html;
         updateActiveSidebarLink();
+
+        document.getElementById('addTypeBtn').addEventListener('click', function() {
+            showCreateDialog('Create Content Type', 'Content type name', async function(name) {
+                var resp = await fetch('/api/types', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Tenant': currentTenant
+                    },
+                    body: JSON.stringify({ name: name })
+                });
+                if (!resp.ok) {
+                    var err = await resp.json();
+                    throw new Error(err.message || 'Failed to create content type');
+                }
+                showToast('Content type created', 'success');
+                await loadContentTypes();
+                window.location.hash = '#/content/' + name;
+            });
+        });
     }
 
     function updateActiveSidebarLink() {
@@ -684,6 +733,65 @@ var Admin = (function() {
 
     function escapeAttr(str) {
         return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Create dialog (reuses confirm-overlay pattern)
+    function showCreateDialog(title, placeholder, onSubmit) {
+        var overlay = document.createElement('div');
+        overlay.className = 'confirm-overlay';
+        overlay.innerHTML = '<div class="confirm-dialog">' +
+            '<h3>' + escapeHtml(title) + '</h3>' +
+            '<div class="form-group" style="margin-bottom:20px;">' +
+                '<input type="text" id="createDialogInput" placeholder="' + escapeAttr(placeholder) + '" autocomplete="off">' +
+            '</div>' +
+            '<div id="createDialogError" class="form-error" style="display:none;"></div>' +
+            '<div class="confirm-dialog-actions">' +
+                '<button class="btn btn-ghost btn-sm" id="createDialogCancel">Cancel</button>' +
+                '<button class="btn btn-primary btn-sm" id="createDialogSubmit">Create</button>' +
+            '</div></div>';
+
+        document.body.appendChild(overlay);
+
+        var input = overlay.querySelector('#createDialogInput');
+        var errorEl = overlay.querySelector('#createDialogError');
+        input.focus();
+
+        overlay.querySelector('#createDialogCancel').addEventListener('click', function() {
+            overlay.remove();
+        });
+
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) overlay.remove();
+        });
+
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') doSubmit();
+            if (e.key === 'Escape') overlay.remove();
+        });
+
+        overlay.querySelector('#createDialogSubmit').addEventListener('click', doSubmit);
+
+        async function doSubmit() {
+            var value = input.value.trim();
+            if (!value) {
+                errorEl.textContent = 'Name is required';
+                errorEl.style.display = '';
+                return;
+            }
+            if (!/^[a-zA-Z0-9-]+$/.test(value)) {
+                errorEl.textContent = 'Only letters, numbers, and hyphens allowed';
+                errorEl.style.display = '';
+                return;
+            }
+            errorEl.style.display = 'none';
+            try {
+                await onSubmit(value);
+                overlay.remove();
+            } catch (e) {
+                errorEl.textContent = e.message || 'Operation failed';
+                errorEl.style.display = '';
+            }
+        }
     }
 
     return { init: init };

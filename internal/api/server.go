@@ -18,10 +18,11 @@ import (
 
 // Server represents the API server
 type Server struct {
-	router  *mux.Router
-	storage storage.Storage
-	config  *ServerConfig
-	wwwFS   embed.FS
+	router   *mux.Router
+	storage  storage.Storage
+	sessions *sessionStore
+	config   *ServerConfig
+	wwwFS    embed.FS
 }
 
 // ServerConfig holds server configuration
@@ -32,10 +33,11 @@ type ServerConfig struct {
 // NewServer creates a new API server
 func NewServer(storageClient storage.Storage, config *ServerConfig, wwwFS embed.FS) *Server {
 	s := &Server{
-		router:  mux.NewRouter(),
-		storage: storageClient,
-		config:  config,
-		wwwFS:   wwwFS,
+		router:   mux.NewRouter(),
+		storage:  storageClient,
+		sessions: newSessionStore(storageClient),
+		config:   config,
+		wwwFS:    wwwFS,
 	}
 
 	s.setupRoutes()
@@ -75,7 +77,9 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/health", s.healthHandler).Methods("GET")
 	api.HandleFunc("/version", s.versionHandler).Methods("GET")
 	api.HandleFunc("/types", s.listTypesHandler).Methods("GET")
+	api.HandleFunc("/types", s.createContentTypeHandler).Methods("POST")
 	api.HandleFunc("/tenants", s.listTenantsHandler).Methods("GET")
+	api.HandleFunc("/tenants", s.createTenantHandler).Methods("POST")
 
 	// Content routes
 	// GET    /api/content/{type}                 - List all live items

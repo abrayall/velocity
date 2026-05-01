@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 )
 
 // ErrStorageNotConfigured is returned when storage operations are attempted without configuration
@@ -198,6 +199,32 @@ func (s *NoopStorage) ListTenants(ctx context.Context) ([]string, error) {
 
 func (s *NoopStorage) ListContentTypes(ctx context.Context, tenant string) ([]string, error) {
 	return nil, ErrStorageNotConfigured
+}
+
+func (s *NoopStorage) CreateTenant(ctx context.Context, tenant string) error {
+	return ErrStorageNotConfigured
+}
+
+func (s *NoopStorage) CreateContentType(ctx context.Context, tenant, contentType string) error {
+	return ErrStorageNotConfigured
+}
+
+// Sessions - all return ErrStorageNotConfigured
+
+func (s *NoopStorage) PutSession(ctx context.Context, token string, expiresAt time.Time) error {
+	return ErrStorageNotConfigured
+}
+
+func (s *NoopStorage) GetSession(ctx context.Context, token string) (time.Time, error) {
+	return time.Time{}, ErrStorageNotConfigured
+}
+
+func (s *NoopStorage) DeleteSession(ctx context.Context, token string) error {
+	return ErrStorageNotConfigured
+}
+
+func (s *NoopStorage) DeleteExpiredSessions(ctx context.Context) (int, error) {
+	return 0, ErrStorageNotConfigured
 }
 
 // Metadata - all return ErrStorageNotConfigured
