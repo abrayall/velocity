@@ -103,7 +103,7 @@ func NewGossipInvalidator(cfg GossipConfig) (*GossipInvalidator, error) {
 	// Set up the delegate for receiving broadcasts
 	delegate := &gossipDelegate{gi: gi}
 	mlConfig.Delegate = delegate
-	mlConfig.Events = &gossipEvents{localName: cfg.NodeName, clusterName: detectServiceName()}
+	mlConfig.Events = &gossipEvents{localName: cfg.NodeName, clusterName: detectServiceName(), gi: gi}
 
 	// Create the memberlist
 	list, err := memberlist.Create(mlConfig)
@@ -202,18 +202,12 @@ func (gi *GossipInvalidator) discoverViaHTTP() {
 
 	// Try to join the peer that responded
 	if result.GossipAddr != "" {
-		joined, _ := gi.list.Join([]string{result.GossipAddr})
-		if joined > 0 {
-			log.Info("Found peer: %s", result.GossipAddr)
-		}
+		gi.list.Join([]string{result.GossipAddr})
 	}
 
 	// Also try any peers it knows about
 	for _, peer := range result.Peers {
-		joined, _ := gi.list.Join([]string{peer})
-		if joined > 0 {
-			log.Info("Found peer: %s", peer)
-		}
+		gi.list.Join([]string{peer})
 	}
 }
 
@@ -522,6 +516,18 @@ func (b *gossipBroadcast) Finished()                                   {}
 type gossipEvents struct {
 	localName   string
 	clusterName string
+	gi          *GossipInvalidator
+}
+
+func (e *gossipEvents) memberNames() string {
+	if e.gi == nil || e.gi.list == nil {
+		return ""
+	}
+	var names []string
+	for _, m := range e.gi.list.Members() {
+		names = append(names, m.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
@@ -534,10 +540,12 @@ func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
 	} else {
 		log.Info("Peer %s (%s) joined the cluster.", node.Name, node.Addr)
 	}
+	log.Info("Cluster members: %s", e.memberNames())
 }
 func (e *gossipEvents) NotifyLeave(node *memberlist.Node) {
 	if node.Name != e.localName {
 		log.Info("Peer %s (%s) left the cluster.", node.Name, node.Addr)
+		log.Info("Cluster members: %s", e.memberNames())
 	}
 }
 func (e *gossipEvents) NotifyUpdate(node *memberlist.Node) {
