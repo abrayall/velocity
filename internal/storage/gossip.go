@@ -545,9 +545,9 @@ func (e *gossipEvents) memberNames() string {
 
 // shortName returns just the unique pod suffix (e.g. "dj89j" from "velocity-server-7b4dd45c56-dj89j")
 func shortName(name string) string {
-	parts := strings.Split(name, "-")
-	if len(parts) > 1 {
-		return parts[len(parts)-1]
+	svc := detectServiceName()
+	if svc != "" && strings.HasPrefix(name, svc+"-") {
+		return strings.TrimPrefix(name, svc+"-")
 	}
 	return name
 }
