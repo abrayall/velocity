@@ -255,7 +255,7 @@ func (gi *GossipInvalidator) Publish(_ context.Context, keys []string) error {
 	}
 
 	gi.broadcasts.QueueBroadcast(&gossipBroadcast{data: data})
-	log.Info("Broadcasting invalidation to peers: %s", strings.Join(keys, ", "))
+	log.Info("Broadcasting invalidation message to cluster for %s.", strings.Join(keys, ", "))
 	return nil
 }
 
