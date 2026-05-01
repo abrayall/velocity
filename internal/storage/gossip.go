@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -294,7 +295,14 @@ func (gi *GossipInvalidator) runDiscovery() {
 	close(entriesCh)
 
 	if gi.list.NumMembers() > 1 {
-		log.Info("Known peers: %d", gi.list.NumMembers()-1)
+		members := gi.list.Members()
+		var names []string
+		for _, m := range members {
+			if m.Name != gi.list.LocalNode().Name {
+				names = append(names, m.Name)
+			}
+		}
+		log.Info("Known cluster peers: %s", strings.Join(names, ", "))
 	}
 }
 
@@ -335,10 +343,10 @@ func (b *gossipBroadcast) Finished()                                   {}
 type gossipEvents struct{}
 
 func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
-	log.Info("Peer joined: %s (%s)", node.Name, node.Addr)
+	log.Info("Peer %s (%s) joined the cluster.", node.Name, node.Addr)
 }
 func (e *gossipEvents) NotifyLeave(node *memberlist.Node) {
-	log.Info("Peer left: %s (%s)", node.Name, node.Addr)
+	log.Info("Peer %s (%s) left the cluster.", node.Name, node.Addr)
 }
 func (e *gossipEvents) NotifyUpdate(node *memberlist.Node) {
 	log.Debug("Peer updated: %s", node.Name)
