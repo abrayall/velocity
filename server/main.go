@@ -98,6 +98,7 @@ func main() {
 
 	// Create storage client
 	var storageClient storage.Storage
+	var gossipInvalidator *storage.GossipInvalidator
 
 	if config.S3AccessKeyID == "" || config.S3SecretAccessKey == "" {
 		// No S3 credentials configured - use noop storage
@@ -150,11 +151,12 @@ func main() {
 			}
 			gossipCfg.EnableMDNS = getEnv("GOSSIP_MDNS", "true") != "false"
 
-			invalidator, err := storage.NewGossipInvalidator(gossipCfg)
+			inv, err := storage.NewGossipInvalidator(gossipCfg)
 			if err != nil {
 				log.Error("Failed to start gossip invalidator: %v", err)
 			} else {
-				cached.SetInvalidator(invalidator)
+				cached.SetInvalidator(inv)
+				gossipInvalidator = inv
 			}
 		}
 
@@ -165,6 +167,11 @@ func main() {
 	server := api.NewServer(storageClient, &api.ServerConfig{
 		Port: config.Port,
 	}, wwwFS)
+
+	// Register cluster peers endpoint for HTTP-based peer discovery
+	if gossipInvalidator != nil {
+		server.RegisterRoute("/cluster/peers", gossipInvalidator.ClusterPeersHandler(), "GET")
+	}
 
 	// Create HTTP server with graceful shutdown
 	addr := fmt.Sprintf(":%s", config.Port)

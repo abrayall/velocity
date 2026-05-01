@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	stdlog "log"
 	"io"
+	stdlog "log"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -57,7 +58,7 @@ func DefaultGossipConfig() GossipConfig {
 }
 
 // GossipInvalidator uses hashicorp/memberlist for peer-to-peer cache invalidation.
-// Peers discover each other via mDNS or explicit seed nodes.
+// Peers discover each other via mDNS, explicit seed nodes, or HTTP-based discovery.
 // Invalidation messages are broadcast via memberlist's gossip protocol.
 type GossipInvalidator struct {
 	list       *memberlist.Memberlist
@@ -66,6 +67,8 @@ type GossipInvalidator struct {
 	mdnsServer *mdns.Server
 	mu         sync.RWMutex
 	stopCh     chan struct{}
+	serviceURL string // HTTP discovery endpoint URL
+	gossipPort int    // port memberlist is bound to
 }
 
 // invalidateMessage is the gossip payload for cache invalidation.
@@ -76,7 +79,8 @@ type invalidateMessage struct {
 // NewGossipInvalidator creates and starts a gossip-based cache invalidator.
 func NewGossipInvalidator(cfg GossipConfig) (*GossipInvalidator, error) {
 	gi := &GossipInvalidator{
-		stopCh: make(chan struct{}),
+		stopCh:     make(chan struct{}),
+		gossipPort: cfg.BindPort,
 	}
 
 	// Configure memberlist
@@ -117,27 +121,20 @@ func NewGossipInvalidator(cfg GossipConfig) (*GossipInvalidator, error) {
 	// Auto-discover peers via service DNS if no explicit peers given
 	if len(cfg.Peers) == 0 {
 		if serviceName := detectServiceName(); serviceName != "" {
-			cfg.Peers = []string{fmt.Sprintf("%s:%d", serviceName, cfg.BindPort)}
+			// Use HTTP-based discovery (port 8080 is routed by the service)
+			gi.serviceURL = fmt.Sprintf("http://%s:8080/api/cluster/peers", serviceName)
+			go gi.httpDiscoveryLoop()
+		} else if cfg.EnableMDNS {
+			gi.startMDNS(cfg)
 		}
-	}
-
-	// Join known peers if provided
-	if len(cfg.Peers) > 0 {
+	} else {
+		// Join explicit peers
 		joined, err := list.Join(cfg.Peers)
 		if err != nil {
 			log.Debug("Peer join attempt: %v", err)
 		} else if joined > 0 {
 			log.Info("Joined %d cluster peer(s)", joined)
 		}
-	}
-
-	// Start mDNS advertisement and discovery (skip if service DNS is available)
-	if cfg.EnableMDNS && len(cfg.Peers) == 0 {
-		gi.startMDNS(cfg)
-	}
-
-	// Periodically re-join via peers to heal split clusters
-	if len(cfg.Peers) > 0 {
 		go gi.rejoinLoop(cfg.Peers)
 	}
 
@@ -152,7 +149,6 @@ func (gi *GossipInvalidator) rejoinLoop(peers []string) {
 	for {
 		select {
 		case <-ticker.C:
-			// Try to join — if we're already connected to these nodes, it's a no-op
 			joined, _ := gi.list.Join(peers)
 			if joined > 0 {
 				log.Info("Cluster healed: joined %d new peer(s)", joined)
@@ -160,6 +156,94 @@ func (gi *GossipInvalidator) rejoinLoop(peers []string) {
 		case <-gi.stopCh:
 			return
 		}
+	}
+}
+
+// httpDiscoveryLoop periodically queries the service HTTP endpoint to discover peer gossip addresses.
+func (gi *GossipInvalidator) httpDiscoveryLoop() {
+	// Wait for the HTTP server to start
+	time.Sleep(3 * time.Second)
+	gi.discoverViaHTTP()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			gi.discoverViaHTTP()
+		case <-gi.stopCh:
+			return
+		}
+	}
+}
+
+func (gi *GossipInvalidator) discoverViaHTTP() {
+	if gi.serviceURL == "" {
+		return
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(gi.serviceURL)
+	if err != nil {
+		log.Debug("Peer discovery HTTP failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		GossipAddr string   `json:"gossip_addr"`
+		Peers      []string `json:"peers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Debug("Peer discovery response parse failed: %v", err)
+		return
+	}
+
+	// Try to join the peer that responded
+	if result.GossipAddr != "" {
+		joined, _ := gi.list.Join([]string{result.GossipAddr})
+		if joined > 0 {
+			log.Info("Found peer: %s", result.GossipAddr)
+		}
+	}
+
+	// Also try any peers it knows about
+	for _, peer := range result.Peers {
+		joined, _ := gi.list.Join([]string{peer})
+		if joined > 0 {
+			log.Info("Found peer: %s", peer)
+		}
+	}
+}
+
+// ClusterPeersHandler returns an HTTP handler for the /api/cluster/peers endpoint.
+// It responds with this node's gossip address and known peers.
+func (gi *GossipInvalidator) ClusterPeersHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		localIP := ""
+		if ips := getLocalIPs(); len(ips) > 0 {
+			localIP = ips[0].String()
+		}
+
+		gossipAddr := fmt.Sprintf("%s:%d", localIP, gi.gossipPort)
+
+		var peers []string
+		if gi.list != nil {
+			for _, m := range gi.list.Members() {
+				addr := fmt.Sprintf("%s:%d", m.Addr.String(), m.Port)
+				if addr != gossipAddr {
+					peers = append(peers, addr)
+				}
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"gossip_addr": gossipAddr,
+			"peers":       peers,
+			"members":     gi.list.NumMembers(),
+		})
 	}
 }
 

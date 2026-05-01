@@ -259,6 +259,11 @@ func (s *Server) setupRoutes() {
 }
 
 // Handler returns the HTTP handler with CORS support
+// RegisterRoute adds an additional route to the API router.
+func (s *Server) RegisterRoute(path string, handler http.HandlerFunc, methods ...string) {
+	s.router.PathPrefix("/api").Subrouter().HandleFunc(path, handler).Methods(methods...)
+}
+
 func (s *Server) Handler() http.Handler {
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
