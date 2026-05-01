@@ -525,9 +525,18 @@ func (e *gossipEvents) memberNames() string {
 	}
 	var names []string
 	for _, m := range e.gi.list.Members() {
-		names = append(names, m.Name)
+		names = append(names, shortName(m.Name))
 	}
 	return strings.Join(names, ", ")
+}
+
+// shortName returns just the unique pod suffix (e.g. "dj89j" from "velocity-server-7b4dd45c56-dj89j")
+func shortName(name string) string {
+	parts := strings.Split(name, "-")
+	if len(parts) > 1 {
+		return parts[len(parts)-1]
+	}
+	return name
 }
 
 func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
