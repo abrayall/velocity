@@ -73,6 +73,7 @@ type GossipInvalidator struct {
 
 // invalidateMessage is the gossip payload for cache invalidation.
 type invalidateMessage struct {
+	From string   `json:"from"`
 	Keys []string `json:"keys"`
 }
 
@@ -247,14 +248,14 @@ func (gi *GossipInvalidator) Publish(_ context.Context, keys []string) error {
 		return nil
 	}
 
-	msg := invalidateMessage{Keys: keys}
+	msg := invalidateMessage{From: gi.list.LocalNode().Name, Keys: keys}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal invalidation message: %w", err)
 	}
 
 	gi.broadcasts.QueueBroadcast(&gossipBroadcast{data: data})
-	log.Info("Broadcasting invalidation to peers (%d keys).", len(keys))
+	log.Info("Broadcasting invalidation to peers: %s", strings.Join(keys, ", "))
 	return nil
 }
 
@@ -288,12 +289,17 @@ func (gi *GossipInvalidator) handleMessage(data []byte) {
 		return
 	}
 
+	// Skip messages from ourselves
+	if gi.list != nil && msg.From == gi.list.LocalNode().Name {
+		return
+	}
+
 	gi.mu.RLock()
 	handler := gi.handler
 	gi.mu.RUnlock()
 
 	if handler != nil && len(msg.Keys) > 0 {
-		log.Info("Received invalidate message from peer (%d keys).", len(msg.Keys))
+		log.Info("Received invalidation from %s: %s", shortName(msg.From), strings.Join(msg.Keys, ", "))
 		handler(msg.Keys)
 	}
 }
