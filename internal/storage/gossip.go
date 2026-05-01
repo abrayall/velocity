@@ -539,6 +539,12 @@ func shortName(name string) string {
 	return name
 }
 
+func (e *gossipEvents) logMembers() {
+	if names := e.memberNames(); names != "" {
+		log.Info("Cluster members: %s", names)
+	}
+}
+
 func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
 	if node.Name == e.localName {
 		if e.clusterName != "" {
@@ -549,12 +555,12 @@ func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
 	} else {
 		log.Info("Peer %s (%s) joined the cluster.", node.Name, node.Addr)
 	}
-	log.Info("Cluster members: %s", e.memberNames())
+	e.logMembers()
 }
 func (e *gossipEvents) NotifyLeave(node *memberlist.Node) {
 	if node.Name != e.localName {
 		log.Info("Peer %s (%s) left the cluster.", node.Name, node.Addr)
-		log.Info("Cluster members: %s", e.memberNames())
+		e.logMembers()
 	}
 }
 func (e *gossipEvents) NotifyUpdate(node *memberlist.Node) {
