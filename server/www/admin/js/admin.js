@@ -48,12 +48,20 @@ var Admin = (function() {
             select.appendChild(opt);
         });
 
+        // Restore saved tenant
+        var savedTenant = localStorage.getItem('velocity_tenant');
+        if (savedTenant && tenants.indexOf(savedTenant) !== -1) {
+            select.value = savedTenant;
+        }
         currentTenant = select.value;
+        localStorage.setItem('velocity_tenant', currentTenant);
 
         select.addEventListener('change', async function() {
             currentTenant = this.value;
+            localStorage.setItem('velocity_tenant', currentTenant);
+            document.getElementById('viewContainer').innerHTML = '<div class="loading">Loading...</div>';
             await loadContentTypes();
-            route();
+            window.location.hash = '#/';
         });
     }
 
@@ -124,6 +132,9 @@ var Admin = (function() {
         } else if (hash.match(/^#\/content\/([^/]+)\/new$/)) {
             var type = hash.match(/^#\/content\/([^/]+)\/new$/)[1];
             renderNewItem(view, type);
+        } else if (hash.match(/^#\/content\/([^/]+)\/([^/]+)\/history$/)) {
+            var m = hash.match(/^#\/content\/([^/]+)\/([^/]+)\/history$/);
+            renderEditItem(view, m[1], m[2], { showHistory: true });
         } else if (hash.match(/^#\/content\/([^/]+)\/([^/]+)$/)) {
             var m = hash.match(/^#\/content\/([^/]+)\/([^/]+)$/);
             renderEditItem(view, m[1], m[2]);
@@ -257,20 +268,24 @@ var Admin = (function() {
             }
 
             var html = '<table><thead><tr>' +
-                '<th>ID</th><th>Last Modified</th><th>Size</th><th class="col-actions">Actions</th>' +
+                '<th>ID</th><th>Type</th><th>Last Modified</th><th>Size</th><th class="col-actions">Actions</th>' +
                 '</tr></thead><tbody>';
 
             items.forEach(function(item) {
                 var modified = item.last_modified ? new Date(item.last_modified).toLocaleDateString() : '-';
                 var size = formatSize(item.size || 0);
+                var ct = item.content_type || '-';
                 html += '<tr>' +
                     '<td><a class="table-link" href="#/content/' + type + '/' + encodeURIComponent(item.id) + '">' + escapeHtml(item.id) + '</a></td>' +
+                    '<td class="text-muted text-sm">' + escapeHtml(ct) + '</td>' +
                     '<td class="text-muted text-sm">' + modified + '</td>' +
                     '<td class="text-muted text-sm">' + size + '</td>' +
                     '<td class="col-actions"><div class="table-actions">' +
                         '<a href="#/content/' + type + '/' + encodeURIComponent(item.id) + '" class="action-link">Edit</a>' +
                         '<span class="action-sep">|</span>' +
                         '<button class="action-link danger delete-item-btn" data-id="' + escapeAttr(item.id) + '">Delete</button>' +
+                        '<span class="action-sep">|</span>' +
+                        '<a href="#/content/' + type + '/' + encodeURIComponent(item.id) + '/history" class="action-link">History</a>' +
                     '</div></td></tr>';
             });
 
@@ -335,85 +350,271 @@ var Admin = (function() {
     }
 
     // Edit Item
-    async function renderEditItem(container, type, id) {
+    async function renderEditItem(container, type, id, opts) {
         container.innerHTML = '<div class="breadcrumb">' +
             '<a href="#/content/' + type + '">' + escapeHtml(type) + '</a>' +
             '<span class="separator">/</span>' +
             '<span class="current">' + escapeHtml(id) + '</span></div>' +
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;margin-bottom:16px;">' +
-            '<h1 class="view-title">' + escapeHtml(id) + '</h1></div>' +
+            '<h1 class="view-title">' + escapeHtml(id) + '</h1>' +
+            '<button class="history-toggle" id="historyToggle">' +
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>' +
+                'History</button></div>' +
+            '<div id="historyPanel"></div>' +
+            '<div id="historyBanner"></div>' +
             '<div id="editorMount"><div class="loading">Loading...</div></div>';
 
-        try {
-            var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id), {
-                headers: {
-                    'Accept': 'application/json',
-                    'X-Tenant': currentTenant
-                }
-            });
+        var historyOpen = false;
+        var viewingVersion = null;
 
-            if (!resp.ok) {
-                document.getElementById('editorMount').innerHTML = '<div class="table-empty">Item not found or cannot be displayed.</div>';
-                return;
+        var toggleBtn = document.getElementById('historyToggle');
+        var editorMount = document.getElementById('editorMount');
+        var historyBanner = document.getElementById('historyBanner');
+
+        toggleBtn.addEventListener('click', function() {
+            historyOpen = !historyOpen;
+            this.classList.toggle('active', historyOpen);
+            if (historyOpen) {
+                editorMount.style.display = 'none';
+                historyBanner.innerHTML = '';
+                viewingVersion = null;
+                loadVersionHistory();
+            } else {
+                document.getElementById('historyPanel').innerHTML = '';
+                historyBanner.innerHTML = '';
+                viewingVersion = null;
+                editorMount.style.display = '';
+                loadCurrentContent();
             }
+        });
 
-            var respContentType = resp.headers.get('Content-Type') || '';
-
-            // Image content - display preview
-            if (respContentType.startsWith('image/')) {
-                var blob = await resp.blob();
-                var url = URL.createObjectURL(blob);
-                document.getElementById('editorMount').innerHTML =
-                    '<div class="media-preview">' +
-                        '<div class="media-info text-muted text-sm" style="margin-bottom:12px;">' +
-                            escapeHtml(respContentType) +
-                        '</div>' +
-                        '<img src="' + url + '" alt="' + escapeAttr(id) + '" style="max-width:100%;border-radius:var(--radius);border:1px solid var(--color-border);">' +
-                    '</div>';
-                return;
-            }
-
-            // Non-JSON text content - display read-only
-            if (!respContentType.includes('json')) {
-                var text = await resp.text();
-                document.getElementById('editorMount').innerHTML =
-                    '<div class="media-preview">' +
-                        '<div class="media-info text-muted text-sm" style="margin-bottom:12px;">' +
-                            escapeHtml(respContentType) +
-                        '</div>' +
-                        '<pre style="padding:16px;background:var(--color-input-bg);border:1px solid var(--color-border);border-radius:var(--radius);overflow:auto;white-space:pre-wrap;">' +
-                            escapeHtml(text) +
-                        '</pre>' +
-                    '</div>';
-                return;
-            }
-
-            var data = await resp.json();
-
-            Editor.render(document.getElementById('editorMount'), data, async function(updated) {
-                try {
-                    var saveResp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id), {
-                        method: 'PUT',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-Tenant': currentTenant
-                        },
-                        body: JSON.stringify(updated)
-                    });
-
-                    if (saveResp.ok) {
-                        showToast('Item saved successfully', 'success');
-                    } else {
-                        var err = await saveResp.json();
-                        showToast(err.message || 'Failed to save', 'error');
-                    }
-                } catch (e) {
-                    showToast('Failed to save item', 'error');
-                }
-            });
-        } catch (e) {
-            document.getElementById('editorMount').innerHTML = '<div class="table-empty">Failed to load item.</div>';
+        if (opts && opts.showHistory) {
+            historyOpen = true;
+            toggleBtn.classList.add('active');
+            editorMount.style.display = 'none';
+            loadVersionHistory();
         }
+
+        async function loadVersionHistory() {
+            var panel = document.getElementById('historyPanel');
+            panel.innerHTML = '<div class="history-panel"><div class="loading" style="padding:16px;">Loading versions...</div></div>';
+
+            try {
+                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id) + '/versions', {
+                    headers: { 'X-Tenant': currentTenant }
+                });
+
+                if (!resp.ok) {
+                    panel.innerHTML = '<div class="history-panel"><div class="table-empty">Failed to load version history.</div></div>';
+                    return;
+                }
+
+                var data = await resp.json();
+                var versions = data.versions || [];
+
+                if (versions.length === 0) {
+                    panel.innerHTML = '<div class="history-panel"><div class="table-empty">No version history available.</div></div>';
+                    return;
+                }
+
+                var html = '<div class="history-panel">' +
+                    '<div class="history-header"><span>Version History</span><span class="text-muted">' + versions.length + ' version' + (versions.length !== 1 ? 's' : '') + '</span></div>' +
+                    '<table><thead><tr>' +
+                    '<th>Version</th><th>Date</th><th>Size</th><th class="col-actions">Actions</th>' +
+                    '</tr></thead><tbody>';
+
+                versions.forEach(function(v) {
+                    var shortId = v.version_id ? v.version_id.substring(0, 12) : '-';
+                    var date = v.last_modified ? new Date(v.last_modified).toLocaleString() : '-';
+                    var size = formatSize(v.size || 0);
+                    var isCurrent = v.is_latest;
+                    var rowClass = isCurrent ? ' class="version-current"' : '';
+
+                    html += '<tr' + rowClass + '>' +
+                        '<td><span class="version-id">' + escapeHtml(shortId) + '</span>' +
+                            (isCurrent ? ' <span class="badge badge-live">Current</span>' : '') + '</td>' +
+                        '<td class="text-muted text-sm">' + date + '</td>' +
+                        '<td class="text-muted text-sm">' + size + '</td>' +
+                        '<td class="col-actions"><div class="version-actions">' +
+                            '<button class="action-link view-version-btn" data-version="' + escapeAttr(v.version_id) + '">View</button>' +
+                            (isCurrent ? '' : '<span class="action-sep">|</span><button class="action-link restore-version-btn" data-version="' + escapeAttr(v.version_id) + '">Restore</button>') +
+                        '</div></td></tr>';
+                });
+
+                html += '</tbody></table></div>';
+                panel.innerHTML = html;
+
+                // Wire view buttons
+                panel.querySelectorAll('.view-version-btn').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        viewVersion(this.dataset.version);
+                    });
+                });
+
+                // Wire restore buttons
+                panel.querySelectorAll('.restore-version-btn').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        restoreVersion(this.dataset.version);
+                    });
+                });
+            } catch (e) {
+                panel.innerHTML = '<div class="history-panel"><div class="table-empty">Failed to load version history.</div></div>';
+            }
+        }
+
+        async function viewVersion(versionId) {
+            viewingVersion = versionId;
+            var shortId = versionId.substring(0, 12);
+            historyBanner.innerHTML = '<div class="history-viewing-banner">' +
+                '<span>Viewing version ' + escapeHtml(shortId) + ' (read-only)</span>' +
+                '<button id="exitVersionView">Close preview</button></div>';
+
+            historyBanner.querySelector('#exitVersionView').addEventListener('click', function() {
+                viewingVersion = null;
+                historyBanner.innerHTML = '';
+            });
+
+            historyBanner.innerHTML += '<div id="versionPreview"><div class="loading">Loading version...</div></div>';
+            var preview = document.getElementById('versionPreview');
+
+            try {
+                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id) + '/versions/' + encodeURIComponent(versionId), {
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Tenant': currentTenant
+                    }
+                });
+
+                if (!resp.ok) {
+                    preview.innerHTML = '<div class="table-empty">Failed to load this version.</div>';
+                    return;
+                }
+
+                var ct = resp.headers.get('Content-Type') || '';
+                if (!ct.includes('json')) {
+                    var text = await resp.text();
+                    preview.innerHTML = '<div class="editor-container"><div class="editor-body">' +
+                        '<pre style="padding:16px;background:var(--color-input-bg);border:1px solid var(--color-border);border-radius:var(--radius-sm);overflow:auto;white-space:pre-wrap;">' +
+                        escapeHtml(text) + '</pre></div></div>';
+                    return;
+                }
+
+                var data = await resp.json();
+                var json = JSON.stringify(data, null, 2);
+                preview.innerHTML = '<div class="editor-container">' +
+                    '<div class="editor-toolbar"><div class="editor-tabs">' +
+                        '<span class="editor-tab active" style="cursor:default;">Read-Only Preview</span>' +
+                    '</div></div>' +
+                    '<div class="editor-body">' +
+                        '<textarea class="raw-editor" readonly style="opacity:0.8;">' + escapeHtml(json) + '</textarea>' +
+                    '</div></div>';
+            } catch (e) {
+                preview.innerHTML = '<div class="table-empty">Failed to load this version.</div>';
+            }
+        }
+
+        async function restoreVersion(versionId) {
+            try {
+                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id) + '/versions/' + encodeURIComponent(versionId) + '/restore', {
+                    method: 'POST',
+                    headers: { 'X-Tenant': currentTenant }
+                });
+
+                if (resp.ok) {
+                    showToast('Version restored successfully', 'success');
+                    // Close history and return to editor
+                    historyOpen = false;
+                    viewingVersion = null;
+                    toggleBtn.classList.remove('active');
+                    document.getElementById('historyPanel').innerHTML = '';
+                    historyBanner.innerHTML = '';
+                    editorMount.style.display = '';
+                    loadCurrentContent();
+                } else {
+                    var err = await resp.json();
+                    showToast(err.message || 'Failed to restore version', 'error');
+                }
+            } catch (e) {
+                showToast('Failed to restore version', 'error');
+            }
+        }
+
+        async function loadCurrentContent() {
+            var mount = document.getElementById('editorMount');
+            mount.innerHTML = '<div class="loading">Loading...</div>';
+
+            try {
+                var resp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id), {
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Tenant': currentTenant
+                    }
+                });
+
+                if (!resp.ok) {
+                    mount.innerHTML = '<div class="table-empty">Item not found or cannot be displayed.</div>';
+                    return;
+                }
+
+                var respContentType = resp.headers.get('Content-Type') || '';
+
+                if (respContentType.startsWith('image/')) {
+                    var blob = await resp.blob();
+                    var url = URL.createObjectURL(blob);
+                    mount.innerHTML =
+                        '<div class="media-preview">' +
+                            '<div class="media-info text-muted text-sm" style="margin-bottom:12px;">' +
+                                escapeHtml(respContentType) +
+                            '</div>' +
+                            '<img src="' + url + '" alt="' + escapeAttr(id) + '" style="max-width:100%;border-radius:var(--radius);border:1px solid var(--color-border);">' +
+                        '</div>';
+                    return;
+                }
+
+                if (!respContentType.includes('json')) {
+                    var text = await resp.text();
+                    mount.innerHTML =
+                        '<div class="media-preview">' +
+                            '<div class="media-info text-muted text-sm" style="margin-bottom:12px;">' +
+                                escapeHtml(respContentType) +
+                            '</div>' +
+                            '<pre style="padding:16px;background:var(--color-input-bg);border:1px solid var(--color-border);border-radius:var(--radius);overflow:auto;white-space:pre-wrap;">' +
+                                escapeHtml(text) +
+                            '</pre>' +
+                        '</div>';
+                    return;
+                }
+
+                var data = await resp.json();
+
+                Editor.render(mount, data, async function(updated) {
+                    try {
+                        var saveResp = await fetch('/api/content/' + encodeURIComponent(type) + '/' + encodeURIComponent(id), {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Tenant': currentTenant
+                            },
+                            body: JSON.stringify(updated)
+                        });
+
+                        if (saveResp.ok) {
+                            showToast('Item saved successfully', 'success');
+                        } else {
+                            var err = await saveResp.json();
+                            showToast(err.message || 'Failed to save', 'error');
+                        }
+                    } catch (e) {
+                        showToast('Failed to save item', 'error');
+                    }
+                });
+            } catch (e) {
+                mount.innerHTML = '<div class="table-empty">Failed to load item.</div>';
+            }
+        }
+
+        // Initial load
+        loadCurrentContent();
     }
 
     // Delete confirmation

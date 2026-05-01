@@ -34,6 +34,10 @@ var mimeToExt = map[string]string{
 	"image/webp":        "webp",
 	"image/svg+xml":     "svg",
 	"application/pdf":   "pdf",
+	"text/markdown":     "md",
+	"text/plain":        "txt",
+	"text/css":          "css",
+	"application/javascript": "js",
 }
 
 // writeJSON writes a JSON response
@@ -389,8 +393,46 @@ func (s *Server) listContentHandler(w http.ResponseWriter, r *http.Request) {
 		filename := parts[len(parts)-1]
 		id := strings.TrimSuffix(filename, filepath.Ext(filename))
 
+		ext := filepath.Ext(filename)
+		mimeType := "application/octet-stream"
+		if ext != "" {
+			switch ext {
+			case ".json":
+				mimeType = "application/json"
+			case ".png":
+				mimeType = "image/png"
+			case ".jpg", ".jpeg":
+				mimeType = "image/jpeg"
+			case ".gif":
+				mimeType = "image/gif"
+			case ".svg":
+				mimeType = "image/svg+xml"
+			case ".webp":
+				mimeType = "image/webp"
+			case ".html":
+				mimeType = "text/html"
+			case ".css":
+				mimeType = "text/css"
+			case ".js":
+				mimeType = "application/javascript"
+			case ".txt":
+				mimeType = "text/plain"
+			case ".md":
+				mimeType = "text/markdown"
+			case ".xml":
+				mimeType = "application/xml"
+			case ".pdf":
+				mimeType = "application/pdf"
+			case ".mp4":
+				mimeType = "video/mp4"
+			case ".mp3":
+				mimeType = "audio/mpeg"
+			}
+		}
+
 		responseItems = append(responseItems, map[string]interface{}{
 			"id":            id,
+			"content_type":  mimeType,
 			"last_modified": item.LastModified,
 			"size":          item.Size,
 		})
