@@ -299,7 +299,7 @@ func (gi *GossipInvalidator) handleMessage(data []byte) {
 	gi.mu.RUnlock()
 
 	if handler != nil && len(msg.Keys) > 0 {
-		log.Info("Received invalidation from %s: %s", shortName(msg.From), strings.Join(msg.Keys, ", "))
+		log.Info("Received invalidation message from %s.", shortName(msg.From))
 		handler(msg.Keys)
 	}
 }
@@ -557,7 +557,7 @@ func (e *gossipEvents) logMembers() {
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		if names := e.memberNames(); names != "" {
-			log.Info("Cluster members: %s", names)
+			log.Info("Cluster members: %s.", names)
 		}
 	}()
 }
@@ -570,13 +570,13 @@ func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
 			log.Info("Joined the cluster as %s.", node.Name)
 		}
 	} else {
-		log.Info("Peer %s (%s) joined the cluster.", node.Name, node.Addr)
+		log.Info("Cluster member %s joined.", shortName(node.Name))
 	}
 	e.logMembers()
 }
 func (e *gossipEvents) NotifyLeave(node *memberlist.Node) {
 	if node.Name != e.localName {
-		log.Info("Peer %s (%s) left the cluster.", node.Name, node.Addr)
+		log.Info("Cluster member %s left.", shortName(node.Name))
 		e.logMembers()
 	}
 }
