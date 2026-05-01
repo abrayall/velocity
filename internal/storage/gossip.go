@@ -137,8 +137,31 @@ func NewGossipInvalidator(cfg GossipConfig) (*GossipInvalidator, error) {
 		gi.startMDNS(cfg)
 	}
 
+	// Periodically re-join via peers to heal split clusters
+	if len(cfg.Peers) > 0 {
+		go gi.rejoinLoop(cfg.Peers)
+	}
 
 	return gi, nil
+}
+
+// rejoinLoop periodically attempts to join peers via service DNS to heal split clusters.
+func (gi *GossipInvalidator) rejoinLoop(peers []string) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Try to join — if we're already connected to these nodes, it's a no-op
+			joined, _ := gi.list.Join(peers)
+			if joined > 0 {
+				log.Info("Cluster healed: joined %d new peer(s)", joined)
+			}
+		case <-gi.stopCh:
+			return
+		}
+	}
 }
 
 // Publish broadcasts invalidation keys to all peers via gossip.
