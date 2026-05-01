@@ -95,8 +95,6 @@ func NewCachedStorage(inner Storage, config CacheConfig) *CachedStorage {
 	// Start background sweep goroutine
 	go cs.sweepLoop()
 
-	log.Info("Cache enabled: ttl=%s, max_entry=%dKB, max_memory=%dMB",
-		config.MaxTTL, config.MaxContentSize/1024, config.MaxMemory/(1024*1024))
 
 	return cs
 }

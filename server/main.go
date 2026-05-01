@@ -134,8 +134,8 @@ func main() {
 			SweepInterval:  1 * time.Minute,
 		})
 
-		// Start gossip-based cache invalidation if enabled
-		if getEnv("GOSSIP_ENABLED", "") != "" {
+		// Start gossip-based cache invalidation (disable with GOSSIP_ENABLED=false)
+		if getEnv("GOSSIP_ENABLED", "true") != "false" {
 			gossipCfg := storage.DefaultGossipConfig()
 			if addr := getEnv("GOSSIP_BIND_ADDR", ""); addr != "" {
 				gossipCfg.BindAddr = addr

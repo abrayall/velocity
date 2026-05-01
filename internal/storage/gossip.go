@@ -115,9 +115,9 @@ func NewGossipInvalidator(cfg GossipConfig) (*GossipInvalidator, error) {
 	if len(cfg.Peers) > 0 {
 		joined, err := list.Join(cfg.Peers)
 		if err != nil {
-			log.Error("Cluster: failed to join peers: %v", err)
+			log.Error("Failed to join cluster peers: %v", err)
 		} else {
-			log.Info("Cluster: joined %d peer(s)", joined)
+			log.Info("Joined %d cluster peer(s)", joined)
 		}
 	}
 
@@ -126,8 +126,8 @@ func NewGossipInvalidator(cfg GossipConfig) (*GossipInvalidator, error) {
 		gi.startMDNS(cfg)
 	}
 
-	log.Info("Cluster: node '%s' started on %s:%d (%d members)",
-		cfg.NodeName, cfg.BindAddr, cfg.BindPort, list.NumMembers())
+	log.Info("Cluster enabled on %s:%d as '%s'",
+		cfg.BindAddr, cfg.BindPort, cfg.NodeName)
 
 	return gi, nil
 }
@@ -145,7 +145,7 @@ func (gi *GossipInvalidator) Publish(_ context.Context, keys []string) error {
 	}
 
 	gi.broadcasts.QueueBroadcast(&gossipBroadcast{data: data})
-	log.Debug("Cluster: published invalidation for %d key(s)", len(keys))
+	log.Debug("Cluster invalidation published (%d keys)", len(keys))
 	return nil
 }
 
@@ -175,7 +175,7 @@ func (gi *GossipInvalidator) Close() error {
 func (gi *GossipInvalidator) handleMessage(data []byte) {
 	var msg invalidateMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
-		log.Error("Cluster: failed to unmarshal message: %v", err)
+		log.Error("Cluster invalidation message error: %v", err)
 		return
 	}
 
@@ -184,7 +184,7 @@ func (gi *GossipInvalidator) handleMessage(data []byte) {
 	gi.mu.RUnlock()
 
 	if handler != nil && len(msg.Keys) > 0 {
-		log.Debug("Cluster: received invalidation for %d key(s)", len(msg.Keys))
+		log.Debug("Cluster invalidation received (%d keys)", len(msg.Keys))
 		handler(msg.Keys)
 	}
 }
@@ -197,20 +197,20 @@ func (gi *GossipInvalidator) startMDNS(cfg GossipConfig) {
 	// Advertise this node
 	service, err := mdns.NewMDNSService(host, mdnsServiceName, "", "", port, nil, []string{"velocity cache invalidation"})
 	if err != nil {
-		log.Error("Cluster: failed to create mDNS service: %v", err)
+		log.Error("mDNS service creation failed: %v", err)
 		return
 	}
 
 	server, err := mdns.NewServer(&mdns.Config{Zone: service})
 	if err != nil {
-		log.Error("Cluster: failed to start mDNS server: %v", err)
+		log.Error("mDNS server start failed: %v", err)
 		return
 	}
 	gi.mdnsServer = server
-	log.Info("Cluster: mDNS advertising on %s", mdnsServiceName)
+	log.Debug("mDNS advertising as %s", mdnsServiceName)
 
 	// Discover peers in background
-	log.Info("Cluster: listening for peers via mDNS (%s)", mdnsServiceName)
+	log.Info("Looking for peers...")
 	go gi.discoverPeers()
 }
 
@@ -259,7 +259,7 @@ func (gi *GossipInvalidator) NumMembers() int {
 }
 
 func (gi *GossipInvalidator) runDiscovery() {
-	log.Debug("Cluster: scanning for peers via mDNS...")
+	log.Debug("Looking for peers...")
 	entriesCh := make(chan *mdns.ServiceEntry, 10)
 	found := 0
 
@@ -275,9 +275,9 @@ func (gi *GossipInvalidator) runDiscovery() {
 			// Try to join this peer
 			joined, err := gi.list.Join([]string{addr})
 			if err != nil {
-				log.Debug("Cluster: mDNS peer join failed (%s): %v", addr, err)
+				log.Debug("Peer join failed (%s): %v", addr, err)
 			} else if joined > 0 {
-				log.Info("Cluster: discovered peer via mDNS: %s", addr)
+				log.Info("Found peer: %s", addr)
 				found++
 			}
 		}
@@ -289,11 +289,13 @@ func (gi *GossipInvalidator) runDiscovery() {
 	params.DisableIPv6 = true
 
 	if err := mdns.Query(params); err != nil {
-		log.Debug("Cluster: mDNS query error: %v", err)
+		log.Debug("mDNS query error: %v", err)
 	}
 	close(entriesCh)
 
-	log.Debug("Cluster: scan complete, %d peers known", gi.list.NumMembers()-1)
+	if gi.list.NumMembers() > 1 {
+		log.Info("Known peers: %d", gi.list.NumMembers()-1)
+	}
 }
 
 func (gi *GossipInvalidator) isSelf(addr net.IP, port int) bool {
@@ -333,13 +335,13 @@ func (b *gossipBroadcast) Finished()                                   {}
 type gossipEvents struct{}
 
 func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
-	log.Info("Cluster: node joined: %s (%s)", node.Name, node.Addr)
+	log.Info("Peer joined: %s (%s)", node.Name, node.Addr)
 }
 func (e *gossipEvents) NotifyLeave(node *memberlist.Node) {
-	log.Info("Cluster: node left: %s (%s)", node.Name, node.Addr)
+	log.Info("Peer left: %s (%s)", node.Name, node.Addr)
 }
 func (e *gossipEvents) NotifyUpdate(node *memberlist.Node) {
-	log.Debug("Cluster: node updated: %s", node.Name)
+	log.Debug("Peer updated: %s", node.Name)
 }
 
 // --- log writer adapter ---
@@ -347,6 +349,6 @@ func (e *gossipEvents) NotifyUpdate(node *memberlist.Node) {
 type logWriter struct{}
 
 func (lw *logWriter) Write(p []byte) (n int, err error) {
-	log.Debug("Cluster: %s", string(p))
+	log.Debug("memberlist: %s", string(p))
 	return len(p), nil
 }
