@@ -117,7 +117,7 @@ fi
 # Generate Dockerfile
 echo -e "${BLUE}Generating Dockerfile...${NC}"
 cat > "$WORK_DIR/Dockerfile" << 'DOCKERFILE'
-FROM golang:1.21-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
