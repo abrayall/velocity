@@ -97,7 +97,7 @@ func NewGossipInvalidator(cfg GossipConfig) (*GossipInvalidator, error) {
 	// Set up the delegate for receiving broadcasts
 	delegate := &gossipDelegate{gi: gi}
 	mlConfig.Delegate = delegate
-	mlConfig.Events = &gossipEvents{}
+	mlConfig.Events = &gossipEvents{localName: cfg.NodeName}
 
 	// Create the memberlist
 	list, err := memberlist.Create(mlConfig)
@@ -374,13 +374,21 @@ func (b *gossipBroadcast) Finished()                                   {}
 
 // --- gossip events (logging only) ---
 
-type gossipEvents struct{}
+type gossipEvents struct {
+	localName string
+}
 
 func (e *gossipEvents) NotifyJoin(node *memberlist.Node) {
-	log.Info("Peer %s (%s) joined the cluster.", node.Name, node.Addr)
+	if node.Name == e.localName {
+		log.Info("Joined the cluster as %s.", node.Name)
+	} else {
+		log.Info("Peer %s (%s) joined the cluster.", node.Name, node.Addr)
+	}
 }
 func (e *gossipEvents) NotifyLeave(node *memberlist.Node) {
-	log.Info("Peer %s (%s) left the cluster.", node.Name, node.Addr)
+	if node.Name != e.localName {
+		log.Info("Peer %s (%s) left the cluster.", node.Name, node.Addr)
+	}
 }
 func (e *gossipEvents) NotifyUpdate(node *memberlist.Node) {
 	log.Debug("Peer updated: %s", node.Name)
